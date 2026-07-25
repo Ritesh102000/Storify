@@ -1,4 +1,4 @@
-import { toWorldView } from "@/lib/domain/state";
+import { assertSchemaV2, toWorldView } from "@/lib/domain/state";
 import { ApiError, errorResponse } from "@/lib/server/api";
 import { getWorld } from "@/lib/server/store";
 
@@ -11,6 +11,7 @@ export async function GET(_request: Request, context: RouteContext) {
     if (!world) {
       throw new ApiError(404, "WORLD_NOT_FOUND", "World not found.");
     }
+    assertSchemaV2(world);
     return Response.json({ characters: toWorldView(world).characters });
   } catch (error) {
     return errorResponse(error);

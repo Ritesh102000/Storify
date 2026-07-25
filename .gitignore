@@ -42,3 +42,6 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+/knowledge/.cache/
+/knowledge/private-archive/
+/knowledge/ingestion-result.json

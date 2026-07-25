@@ -1,12 +1,12 @@
 # Pocket Multiverse
 
-A hackathon MVP for living audio stories. A listener creates or customizes a
-world, makes permanent choices, sees character-specific memories, hears the
-scene, and can open a private character spin-off.
+A hackathon MVP for persistent, choice-driven audio stories. The listener starts
+or customizes a world, makes server-validated choices, sees character-specific
+memories, hears the scene, and can continue with another arc in the same canon.
 
-## Run locally
+## Run
 
-Requirements: Node.js 22.13 or newer.
+Requires Node.js 22.13 or newer.
 
 ```bash
 npm install
@@ -14,63 +14,70 @@ cp .env.example .env.local
 npm run dev
 ```
 
-Add a server-side `OPENAI_API_KEY` to `.env.local`. Never use a
-`NEXT_PUBLIC_` prefix for the key.
+Set `OPENAI_API_KEY` server-side. For hosted story-pattern retrieval also set:
 
-The exact local URL is printed by the development server. If port 3000 is
-already in use it may select 3001.
-
-## Test
-
-```bash
-npm run typecheck
-npm run lint
-npm test
+```env
+OPENAI_RAG_ENABLED=true
+OPENAI_STORY_VECTOR_STORE_ID=vs_...
 ```
 
-`OPENAI_FIXTURE_MODE=true` keeps the full deterministic demo usable without
-live model calls. Fixture mode is also used automatically when the API key is
-missing or a generation call fails.
+Never use a `NEXT_PUBLIC_` prefix for these values.
 
-## What is built
+## Knowledge base
 
-- Blackmoor, Neon Afterlight, and Monsoon House starter worlds
-- Create Your Own mode using a tested mechanical template
-- editable world context and three character prototypes
-- OpenAI Responses API with strict structured outputs
-- a six-chapter plot spine generated with every world
-- deterministic chapter advancement across new locations and objectives
-- open-story-thread and discovered-clue tracking
-- a repetition guard with plot-aware fallback scenes
-- OpenAI moderation for creative setup input
-- server-owned commands, preconditions, effects, and state diffs
-- per-character witnessed memories and trust/tension
-- three validated choices per story turn
-- context trace showing the events, memories, facts, and state sent to the model
-- private, one-level character spin-offs
-- OpenAI text-to-speech with an AI-voice disclosure
-- D1 persistence and deterministic fallbacks
+```bash
+npm run rag:download
+npm run rag:ingest
+```
 
-## Important boundaries
+The manifest pins 18 public-domain Project Gutenberg editions. Downloaded full
+texts remain ignored and private. Ingestion uploads 18 source files plus 108
+sanitized abstract craft cards. Live story prompts search only craft cards.
 
-OpenAI creates world content, narration, dialogue, choice wording, spin-off
-openings, moderation decisions, and voice audio. It does not write state
-directly. The application commits commands and effects before asking OpenAI to
-describe the result.
+## Validation
 
-Only validated, unlocked character knowledge enters an ordinary story-turn
-prompt. Character secrets are never returned by the public world APIs.
+```bash
+npm run test:deterministic
+npm run typecheck
+npm run lint
+npm run build
+```
+
+The deterministic suite does not generate a live multi-turn story.
+
+## Built
+
+- three starter worlds and Create Your Own;
+- editable premise, rules, role, conflict, mood, and character prototypes;
+- strict OpenAI world and story structured outputs;
+- explicit OpenAI vector search with four-second local fallback;
+- seven flexible dramatic milestones spanning 8–15 scenes;
+- causal choice → consequence → scene generation;
+- 120–200 word narration and 4–8 connected dialogue lines;
+- one unique discovery maximum per scene;
+- server-owned command effects, state diffs, objectives, and progression;
+- physically valid Protect/Confront targets;
+- immutable events and actual-location character memories;
+- distinct choice intent and anticipated tradeoff;
+- Context Trace retrieval provenance;
+- private character spin-offs and OpenAI TTS;
+- D1 aggregate persistence;
+- same-world arc continuation after resolution.
+
+OpenAI writes creative content. It never writes state directly. The server
+commits the selected typed command before generation and validates the complete
+scene before persistence.
 
 ## Main code
 
 ```text
-app/api/demo/               HTTP routes
-components/demo-app.tsx     replaceable test UI
-lib/domain/                 state, commands, choices, context, fallbacks
-lib/server/openai.ts        OpenAI adapter
-lib/server/store.ts         D1 persistence
-lib/fixtures.ts             three starter worlds
-lib/schemas.ts              strict structured-output and request schemas
-db/                         D1 schema bootstrap
-tests/                      build/UI contract checks
+app/api/demo/                         API routes
+components/demo-app.tsx               simple test UI
+lib/domain/                           commands, state, validation, fallbacks
+lib/rag/corpus.ts                     local sanitized craft corpus
+lib/server/retrieval.ts               hosted search and fallback
+lib/server/openai.ts                  OpenAI structured generation and TTS
+knowledge/source-manifest.json        sources, rights metadata, hashes
+scripts/ingest-story-rag.mjs           private corpus ingestion
+tests/story-engine.test.ts            deterministic engine checks
 ```

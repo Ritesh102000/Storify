@@ -1,4 +1,5 @@
 import { createId } from "@/lib/id";
+import { assertSchemaV2 } from "@/lib/domain/state";
 import { spinOffRequestSchema } from "@/lib/schemas";
 import { ApiError, errorResponse } from "@/lib/server/api";
 import { generateSpinOff } from "@/lib/server/openai";
@@ -15,6 +16,7 @@ export async function POST(request: Request, context: RouteContext) {
     if (!world) {
       throw new ApiError(404, "WORLD_NOT_FOUND", "World not found.");
     }
+    assertSchemaV2(world);
     if (world.branch_id !== input.source_branch_id) {
       throw new ApiError(
         409,

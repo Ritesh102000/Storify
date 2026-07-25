@@ -60,6 +60,28 @@ export function errorResponse(error: unknown): Response {
     );
   }
 
+  if (
+    error instanceof Error &&
+    "status" in error &&
+    "code" in error &&
+    typeof error.status === "number" &&
+    typeof error.code === "string"
+  ) {
+    return Response.json(
+      {
+        error: {
+          code: error.code,
+          message:
+            "publicMessage" in error && typeof error.publicMessage === "string"
+              ? error.publicMessage
+              : error.message,
+          retryable: false,
+        },
+      },
+      { status: error.status },
+    );
+  }
+
   console.error(error);
   return Response.json(
     {

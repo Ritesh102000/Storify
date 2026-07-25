@@ -29,6 +29,7 @@ import {
   STORY_TURN_INSTRUCTIONS,
   WORLD_BUILDER_INSTRUCTIONS,
 } from "./prompts";
+import { retrieveForWorld } from "./retrieval";
 
 const STORY_MODEL = process.env.OPENAI_STORY_MODEL || "gpt-5.6-sol";
 const SPEECH_MODEL = "gpt-4o-mini-tts";
@@ -41,6 +42,7 @@ export async function generateWorldPreview(
 ): Promise<WorldPreview> {
   const started = Date.now();
   const resolvedTemplateId = resolveNearestTemplate(input);
+  const retrieval = await retrieveForWorld(input, resolvedTemplateId);
   const client = openAIClient();
   let seed = buildLayeredFallbackSeed(input, resolvedTemplateId);
   let status: GenerationStatus = "fixture";
@@ -67,11 +69,12 @@ export async function generateWorldPreview(
           input: JSON.stringify({
             user_setup: input,
             nearest_mechanical_template: seed,
+            retrieved_craft_cards: retrieval.cards,
           }),
           text: {
             format: zodTextFormat(worldSeedDraftSchema, "world_seed"),
           },
-          max_output_tokens: 6200,
+          max_output_tokens: 5600,
           store: false,
         },
         { signal: AbortSignal.timeout(35_000) },
@@ -98,6 +101,7 @@ export async function generateWorldPreview(
     resolved_template_id: seed.base_template_id,
     seed,
     creative_diffs: creativeDiffs(seed.base_template_id, seed),
+    retrieval: retrieval.trace,
     generation: {
       status,
       provider,
@@ -144,7 +148,7 @@ export async function generateStoryTurn(
           text: {
             format: zodTextFormat(storyTurnDraftSchema, "story_turn"),
           },
-          max_output_tokens: 2200,
+          max_output_tokens: 3600,
           store: false,
         },
         { signal: AbortSignal.timeout(15_000) },

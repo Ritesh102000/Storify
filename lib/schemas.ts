@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MILESTONE_TYPES } from "./types";
 
 export const templateIdSchema = z.enum([
   "blackmoor",
@@ -12,17 +13,10 @@ export const commandTypeSchema = z.enum([
   "pursue_goal",
   "confront_character",
 ]);
-export const plotBeatTypeSchema = z.enum([
-  "setup",
-  "pursuit",
-  "reveal",
-  "reversal",
-  "crisis",
-  "climax",
-]);
+export const milestoneTypeSchema = z.enum(MILESTONE_TYPES);
 
-const shortText = z.string().trim().min(1).max(180);
-const paragraph = z.string().trim().min(1).max(900);
+const shortText = z.string().trim().min(1).max(240);
+const paragraph = z.string().trim().min(1).max(1200);
 
 export const characterDraftSchema = z
   .object({
@@ -44,24 +38,20 @@ export const choiceProposalSchema = z
     axis: axisSchema,
     command_type: commandTypeSchema,
     target_prototype: prototypeSchema.nullable(),
-    label: z.string().trim().min(1).max(140),
+    label: z.string().trim().min(1).max(160),
+    narrative_intent: shortText,
+    anticipated_tradeoff: shortText,
   })
   .strict();
 
-export const plotBeatSchema = z
+export const milestoneContractSchema = z
   .object({
-    beat_type: plotBeatTypeSchema,
-    title: z.string().trim().min(1).max(80),
-    location: shortText,
-    objective: shortText,
-    obstacle: paragraph,
-    development: paragraph,
-    reveal: paragraph,
-    story_question: shortText,
-    present_character_prototypes: z
-      .array(prototypeSchema)
-      .min(1)
-      .max(3),
+    milestone_type: milestoneTypeSchema,
+    dramatic_purpose: paragraph,
+    stakes_change: paragraph,
+    completion_evidence_description: paragraph,
+    permitted_revelations: z.array(shortText).max(3),
+    forbidden_revelations: z.array(shortText).max(3),
   })
   .strict();
 
@@ -87,11 +77,11 @@ export const worldSeedDraftSchema = z
         opening_hook: shortText,
       })
       .strict(),
-    plot_outline: z
+    arc_plan: z
       .object({
         theme: shortText,
         ending_direction: paragraph,
-        beats: z.array(plotBeatSchema).length(6),
+        milestones: z.array(milestoneContractSchema).length(7),
       })
       .strict(),
     characters: z.array(characterDraftSchema).length(3),
@@ -99,16 +89,13 @@ export const worldSeedDraftSchema = z
       .object({
         location: shortText,
         situation: paragraph,
-        present_character_prototypes: z
-          .array(prototypeSchema)
-          .min(1)
-          .max(3),
-        objective_label: z.string().trim().min(1).max(80),
-        danger_label: z.string().trim().min(1).max(80),
+        present_character_prototypes: z.array(prototypeSchema).min(2).max(3),
+        objective_label: z.string().trim().min(1).max(100),
+        danger_label: z.string().trim().min(1).max(100),
         threat_prototype: z.literal("rival"),
       })
       .strict(),
-    opening_narration: z.string().trim().min(40).max(1600),
+    opening_narration: z.string().trim().min(40).max(1800),
     first_choice_proposals: z.array(choiceProposalSchema).length(3),
   })
   .strict()
@@ -123,57 +110,26 @@ export const worldSeedDraftSchema = z
         });
       }
     }
-
-    const expected = {
+    const expectedCommands = {
       protect: "help_character",
       pursue: "pursue_goal",
       confront: "confront_character",
     } as const;
     for (const proposal of value.first_choice_proposals) {
-      if (expected[proposal.axis] !== proposal.command_type) {
+      if (expectedCommands[proposal.axis] !== proposal.command_type) {
         context.addIssue({
           code: "custom",
           path: ["first_choice_proposals"],
-          message: `Axis ${proposal.axis} must use ${expected[proposal.axis]}.`,
+          message: `Axis ${proposal.axis} must use ${expectedCommands[proposal.axis]}.`,
         });
       }
     }
-
-    const expectedBeats = [
-      "setup",
-      "pursuit",
-      "reveal",
-      "reversal",
-      "crisis",
-      "climax",
-    ];
-    const actualBeats = value.plot_outline.beats.map((beat) => beat.beat_type);
-    if (actualBeats.some((beat, index) => beat !== expectedBeats[index])) {
+    const actual = value.arc_plan.milestones.map((item) => item.milestone_type);
+    if (actual.some((item, index) => item !== MILESTONE_TYPES[index])) {
       context.addIssue({
         code: "custom",
-        path: ["plot_outline", "beats"],
-        message:
-          "Plot beats must be setup, pursuit, reveal, reversal, crisis, and climax in order.",
-      });
-    }
-    const distinctLocations = new Set(
-      value.plot_outline.beats.map((beat) => beat.location.toLowerCase()),
-    );
-    if (distinctLocations.size < 4) {
-      context.addIssue({
-        code: "custom",
-        path: ["plot_outline", "beats"],
-        message: "The plot must use at least four distinct locations.",
-      });
-    }
-    const distinctDevelopments = new Set(
-      value.plot_outline.beats.map((beat) => beat.development.toLowerCase()),
-    );
-    if (distinctDevelopments.size !== 6) {
-      context.addIssue({
-        code: "custom",
-        path: ["plot_outline", "beats"],
-        message: "Every beat must introduce a distinct development.",
+        path: ["arc_plan", "milestones"],
+        message: "Milestones must use the canonical seven-stage order.",
       });
     }
   });
@@ -189,13 +145,11 @@ export const worldSetupInputSchema = z
     world_rules: z.array(shortText).max(3),
     character_overrides: z
       .array(
-        z
-          .object({
-            prototype: prototypeSchema,
-            name: z.string().trim().max(48),
-            instruction: z.string().trim().max(240),
-          })
-          .strict(),
+        z.object({
+          prototype: prototypeSchema,
+          name: z.string().trim().max(48),
+          instruction: z.string().trim().max(240),
+        }).strict(),
       )
       .max(3),
     customization_prompt: z.string().trim().max(1000),
@@ -204,69 +158,63 @@ export const worldSetupInputSchema = z
   })
   .strict();
 
+const dialogueLineSchema = z.object({
+  character_id: z.string().trim().min(1).max(80),
+  text: z.string().trim().min(1).max(380),
+  responds_to_previous: z.boolean(),
+}).strict();
+
 export const storyTurnDraftSchema = z
   .object({
+    because_of_choice: paragraph,
+    immediate_consequence: paragraph,
+    time_passed: shortText,
+    transition_reason: paragraph,
+    milestone_action: z.enum(["continue", "complete"]),
+    milestone_completion_evidence: paragraph.nullable(),
     scene_title: z.string().trim().min(1).max(100),
     location: shortText,
-    situation: paragraph,
     scene_goal: shortText,
-    new_information: paragraph,
+    obstacle: paragraph,
+    new_information: paragraph.nullable(),
     thread_opened: shortText.nullable(),
     thread_resolved: shortText.nullable(),
-    narration: z.string().trim().min(20).max(1600),
-    dialogue: z
-      .array(
-        z
-          .object({
-            character_id: z.string().trim().min(1).max(80),
-            text: z.string().trim().min(1).max(320),
-          })
-          .strict(),
-      )
-      .max(2),
+    present_character_ids: z.array(z.string().trim().min(1).max(80)).min(2).max(3),
+    narration: z.string().trim().min(40).max(2400),
+    dialogue: z.array(dialogueLineSchema).min(4).max(8),
     choice_proposals: z
       .array(
-        z
-          .object({
-            axis: axisSchema,
-            command_type: commandTypeSchema,
-            arguments: z
-              .object({
-                target_id: z.string().trim().min(1).max(80).nullable(),
-              })
-              .strict(),
-            label: z.string().trim().min(1).max(140),
-          })
-          .strict(),
+        z.object({
+          axis: axisSchema,
+          command_type: commandTypeSchema,
+          arguments: z.object({
+            target_id: z.string().trim().min(1).max(80).nullable(),
+          }).strict(),
+          label: z.string().trim().min(1).max(160),
+          narrative_intent: shortText,
+          anticipated_tradeoff: shortText,
+        }).strict(),
       )
-      .max(6),
+      .length(3),
   })
   .strict();
 
-export const chooseRequestSchema = z
-  .object({
-    branch_id: z.string().trim().min(1),
-    choice_id: z.string().trim().min(1),
-  })
-  .strict();
-
-export const spinOffRequestSchema = z
-  .object({
-    source_branch_id: z.string().trim().min(1),
-    source_event_id: z.string().trim().min(1),
-    character_id: z.string().trim().min(1),
-  })
-  .strict();
-
-export const createWorldRequestSchema = z
-  .object({
-    preview_id: z.string().trim().min(1),
-  })
-  .strict();
-
-export const spinOffDraftSchema = z
-  .object({
-    title: z.string().trim().min(1).max(100),
-    opening_narration: z.string().trim().min(40).max(1600),
-  })
-  .strict();
+export const chooseRequestSchema = z.object({
+  branch_id: z.string().trim().min(1),
+  choice_id: z.string().trim().min(1),
+}).strict();
+export const spinOffRequestSchema = z.object({
+  source_branch_id: z.string().trim().min(1),
+  source_event_id: z.string().trim().min(1),
+  character_id: z.string().trim().min(1),
+}).strict();
+export const createWorldRequestSchema = z.object({
+  preview_id: z.string().trim().min(1),
+}).strict();
+export const continueWorldRequestSchema = z.object({
+  branch_id: z.string().trim().min(1),
+}).strict();
+export const spinOffDraftSchema = z.object({
+  title: z.string().trim().min(1).max(100),
+  opening_narration: z.string().trim().min(40).max(1600),
+}).strict();

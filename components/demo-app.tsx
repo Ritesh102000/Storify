@@ -184,6 +184,27 @@ export function DemoApp() {
     }
   }
 
+  async function continueWorld() {
+    if (!world || busy) return;
+    setBusy("Opening a new arc in this world");
+    setError("");
+    setActiveSpinOff(null);
+    try {
+      const data = await api<{ world: WorldView }>(
+        `/api/demo/worlds/${world.universe_id}/continue`,
+        {
+          method: "POST",
+          body: JSON.stringify({ branch_id: world.branch_id }),
+        },
+      );
+      setWorld(data.world);
+    } catch (reason) {
+      setError(messageOf(reason));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function startOver() {
     if (world) {
       await fetch(`/api/demo/worlds/${world.universe_id}/reset`, {
@@ -270,6 +291,7 @@ export function DemoApp() {
           listen={listen}
           createSpinOff={createSpinOff}
           closeSpinOff={() => setActiveSpinOff(null)}
+          continueWorld={continueWorld}
           reset={startOver}
           busy={Boolean(busy)}
         />
@@ -534,6 +556,15 @@ function PreviewScreen({
           <h2>Opening scene</h2>
           <small>{preview.seed.opening_scene.location}</small>
           <p>{preview.seed.opening_narration}</p>
+          <h3>Story pattern retrieval</h3>
+          <p>
+            {preview.retrieval?.used_local_fallback
+              ? "Sanitized local craft cards are ready; hosted search was unavailable."
+              : "OpenAI vector search selected sanitized dramatic patterns."}
+          </p>
+          {preview.retrieval?.source_titles.length ? (
+            <small>{preview.retrieval.source_titles.join(" · ")}</small>
+          ) : null}
         </article>
       </div>
 
@@ -582,6 +613,7 @@ function PlayerScreen({
   listen,
   createSpinOff,
   closeSpinOff,
+  continueWorld,
   reset,
   busy,
 }: {
@@ -592,6 +624,7 @@ function PlayerScreen({
   listen: () => void;
   createSpinOff: (characterId: string) => void;
   closeSpinOff: () => void;
+  continueWorld: () => void;
   reset: () => void;
   busy: boolean;
 }) {
@@ -611,13 +644,12 @@ function PlayerScreen({
       <div className="player-header">
         <div>
           <p className="eyebrow">
-            Chapter {world.plot_progress.current_beat_index + 1} of{" "}
-            {world.plot_progress.total_beats} ·{" "}
-            {world.plot_progress.current_beat.beat_type}
+            Arc {world.arc_progress.arc_number} ·{" "}
+            {world.arc_progress.current_milestone.milestone_type}
           </p>
           <h1>{world.universe.title}</h1>
           <p className="chapter-title">
-            {world.plot_progress.current_beat.title}
+            {world.scene.title}
           </p>
         </div>
         <div className="player-actions">
@@ -634,9 +666,7 @@ function PlayerScreen({
         <span
           style={{
             width: `${
-              (world.plot_progress.current_beat_index /
-                (world.plot_progress.total_beats - 1)) *
-              100
+              world.state.story_progress
             }%`,
           }}
         />
@@ -664,12 +694,6 @@ function PlayerScreen({
                 {line.text}
               </blockquote>
             ))}
-            {world.scene.new_information ? (
-              <div className="discovery">
-                <strong>New discovery</strong>
-                <span>{world.scene.new_information}</span>
-              </div>
-            ) : null}
             {audioUrl ? (
               <div className="audio-wrap">
                 <audio id="story-audio" controls src={audioUrl} />
@@ -682,6 +706,13 @@ function PlayerScreen({
             <div className="ending">
               <h2>This branch reached its ending.</h2>
               <p>Your events and character memories remain available below.</p>
+              <button
+                className="primary"
+                disabled={busy}
+                onClick={continueWorld}
+              >
+                Continue in this world
+              </button>
             </div>
           ) : (
             <section className="choices">
@@ -694,6 +725,8 @@ function PlayerScreen({
                 >
                   <span>{choice.axis}</span>
                   <strong>{choice.label}</strong>
+                  <small>{choice.narrative_intent}</small>
+                  <small>Tradeoff: {choice.anticipated_tradeoff}</small>
                 </button>
               ))}
             </section>
@@ -733,13 +766,13 @@ function PlayerScreen({
           <div className="state-strip">
             <div>
               <small>Objective</small>
-              <strong>{world.state.objective_status}</strong>
+              <strong>{world.state.active_objective.status}</strong>
             </div>
             <div>
               <small>Progress</small>
               <strong>
-                {world.plot_progress.current_beat_index + 1}/
-                {world.plot_progress.total_beats}
+                {world.arc_progress.completed_count}/
+                {world.arc_progress.total_milestones}
               </strong>
             </div>
             <div>
@@ -757,15 +790,15 @@ function PlayerScreen({
             <summary>Plot threads</summary>
             <h4>Questions still open</h4>
             <ul className="thread-list">
-              {world.plot_progress.open_threads.map((thread) => (
+              {world.arc_progress.open_threads.map((thread) => (
                 <li key={thread}>{thread}</li>
               ))}
             </ul>
-            {world.plot_progress.discovered_clues.length ? (
+            {world.arc_progress.discovered_clues.length ? (
               <>
                 <h4>Discoveries</h4>
                 <ul className="thread-list clues">
-                  {world.plot_progress.discovered_clues
+                  {world.arc_progress.discovered_clues
                     .slice(-3)
                     .map((clue) => (
                       <li key={clue}>{clue}</li>
@@ -833,8 +866,8 @@ function PlayerScreen({
               <summary>Context trace</summary>
               <dl>
                 <div>
-                  <dt>Active plot beat</dt>
-                  <dd>{world.context_trace.plot_beat}</dd>
+                  <dt>Active milestone</dt>
+                  <dd>{world.context_trace.milestone_type}</dd>
                 </div>
                 <div>
                   <dt>Recent events</dt>
@@ -851,6 +884,25 @@ function PlayerScreen({
                 <div>
                   <dt>Valid choices</dt>
                   <dd>{world.context_trace.valid_choice_count}</dd>
+                </div>
+                <div>
+                  <dt>Story patterns</dt>
+                  <dd>{world.context_trace.retrieval.card_ids.length}</dd>
+                </div>
+                <div>
+                  <dt>RAG sources</dt>
+                  <dd>
+                    {world.context_trace.retrieval.source_titles.join(", ") ||
+                      "Local craft fallback"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Retrieval mode</dt>
+                  <dd>
+                    {world.context_trace.retrieval.used_local_fallback
+                      ? "Local sanitized cards"
+                      : "OpenAI vector search"}
+                  </dd>
                 </div>
               </dl>
             </details>

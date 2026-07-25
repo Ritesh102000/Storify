@@ -1,4 +1,4 @@
-import { currentScene } from "@/lib/domain/state";
+import { assertSchemaV2, currentScene } from "@/lib/domain/state";
 import { ApiError, errorResponse } from "@/lib/server/api";
 import { synthesizeSpeech } from "@/lib/server/openai";
 import { getWorld } from "@/lib/server/store";
@@ -12,6 +12,7 @@ export async function POST(_request: Request, context: RouteContext) {
     if (!world) {
       throw new ApiError(404, "WORLD_NOT_FOUND", "World not found.");
     }
+    assertSchemaV2(world);
     const scene = currentScene(world);
     const characterNames = new Map(
       world.characters.map((character) => [
