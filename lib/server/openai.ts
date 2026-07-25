@@ -71,10 +71,10 @@ export async function generateWorldPreview(
           text: {
             format: zodTextFormat(worldSeedDraftSchema, "world_seed"),
           },
-          max_output_tokens: 4200,
+          max_output_tokens: 6200,
           store: false,
         },
-        { signal: AbortSignal.timeout(20_000) },
+        { signal: AbortSignal.timeout(35_000) },
       );
       if (!response.output_parsed) {
         throw new Error("OpenAI returned no parsed world.");

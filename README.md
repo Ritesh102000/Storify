@@ -38,6 +38,10 @@ missing or a generation call fails.
 - Create Your Own mode using a tested mechanical template
 - editable world context and three character prototypes
 - OpenAI Responses API with strict structured outputs
+- a six-chapter plot spine generated with every world
+- deterministic chapter advancement across new locations and objectives
+- open-story-thread and discovered-clue tracking
+- a repetition guard with plot-aware fallback scenes
 - OpenAI moderation for creative setup input
 - server-owned commands, preconditions, effects, and state diffs
 - per-character witnessed memories and trust/tension

@@ -69,10 +69,10 @@ export function commitChoice(
   let primaryEffect = "";
 
   if (choice.command_type === "help_character") {
-    if (!targetId || !scene.present_character_ids.includes(targetId)) {
+    if (!targetId) {
       throw new CommandError(
         "COMMAND_PRECONDITION_FAILED",
-        "That character is not present.",
+        "That character cannot be identified.",
       );
     }
     const status = session.state.character_statuses[targetId];
@@ -130,7 +130,6 @@ export function commitChoice(
     if (
       !targetId ||
       targetId !== session.state.active_threat_id ||
-      !scene.present_character_ids.includes(targetId) ||
       session.state.character_statuses[targetId] !== "active"
     ) {
       throw new CommandError(

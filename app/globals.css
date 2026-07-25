@@ -587,7 +587,13 @@ summary {
 
 .player-header h1 {
   font-size: 35px;
-  margin-bottom: 18px;
+  margin-bottom: 7px;
+}
+
+.chapter-title {
+  margin: 0 0 18px;
+  color: var(--muted);
+  font-size: 14px;
 }
 
 .player-actions {
@@ -628,6 +634,23 @@ summary {
   padding: clamp(24px, 5vw, 50px);
 }
 
+.scene-title {
+  margin: 24px 0 8px;
+  font-size: clamp(24px, 4vw, 38px);
+  letter-spacing: -0.035em;
+}
+
+.scene-goal {
+  display: flex;
+  gap: 9px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.scene-goal strong {
+  color: var(--ink);
+}
+
 .scene-meta {
   display: flex;
   justify-content: space-between;
@@ -664,6 +687,24 @@ blockquote strong {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+.discovery {
+  display: grid;
+  gap: 5px;
+  margin-top: 24px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: #fff1d8;
+  color: #75490a;
+  line-height: 1.45;
+  font-size: 13px;
+}
+
+.discovery strong {
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
 }
 
 .audio-wrap audio {
@@ -929,6 +970,30 @@ blockquote strong {
 
 .trace dl {
   margin-bottom: 0;
+}
+
+.trace h4 {
+  margin: 16px 0 8px;
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.thread-list {
+  margin: 0;
+  padding-left: 17px;
+  color: #44474c;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.thread-list li {
+  margin-bottom: 7px;
+}
+
+.thread-list.clues li::marker {
+  color: var(--accent);
 }
 
 .trace dl div {

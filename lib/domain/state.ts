@@ -5,6 +5,7 @@ import type {
   ContextTrace,
   FastTurnPacket,
   GameState,
+  PlotBeat,
   Prototype,
   Scene,
   StoryEvent,
@@ -41,6 +42,7 @@ export function materializeWorld(preview: WorldPreview): WorldSession {
   const storylineId = createId("story");
   const branchId = createId("branch");
   const sceneId = createId("scene");
+  const openingBeat = preview.seed.plot_outline.beats[0];
 
   const state: GameState = {
     schema_version: 1,
@@ -68,8 +70,13 @@ export function materializeWorld(preview: WorldPreview): WorldSession {
   const scene: Scene = {
     scene_id: sceneId,
     scene_index: 0,
+    title: openingBeat.title,
     location: preview.seed.opening_scene.location,
     situation: preview.seed.opening_scene.situation,
+    scene_goal: openingBeat.objective,
+    new_information: null,
+    thread_opened: preview.seed.story.central_question,
+    thread_resolved: null,
     present_character_ids:
       preview.seed.opening_scene.present_character_prototypes.map(
         (prototype) => mustGetCharacter(characterByPrototype, prototype).character_id,
@@ -93,6 +100,16 @@ export function materializeWorld(preview: WorldPreview): WorldSession {
     template_id: preview.resolved_template_id,
     universe: preview.seed.universe,
     story: preview.seed.story,
+    plot_outline: preview.seed.plot_outline,
+    plot_state: {
+      current_beat_index: 0,
+      completed_beat_types: [],
+      open_threads: [preview.seed.story.central_question],
+      discovered_clues: [],
+      last_new_information: null,
+      recent_locations: [preview.seed.opening_scene.location],
+      last_transition: null,
+    },
     semantic_labels: {
       objective_label: preview.seed.opening_scene.objective_label,
       danger_label: preview.seed.opening_scene.danger_label,
@@ -150,7 +167,12 @@ export function buildFastTurnPacket(
   event: StoryEvent,
 ): { packet: FastTurnPacket; trace: ContextTrace } {
   const scene = currentScene(session);
-  const activeCharacterIds = scene.present_character_ids;
+  const activeBeat = currentPlotBeat(session);
+  const previousBeat =
+    session.plot_outline.beats[
+      Math.max(0, session.plot_state.current_beat_index - 1)
+    ];
+  const activeCharacterIds = characterIdsForBeat(session, activeBeat);
   const recentEvents = session.events.slice(-3).map((recentEvent) => ({
     event_id: recentEvent.event_id,
     command_type: recentEvent.command_type,
@@ -219,9 +241,11 @@ export function buildFastTurnPacket(
     ),
     unlocked_fact_ids: session.state.unlocked_fact_ids,
     state_fields: stateFields,
+    plot_beat: activeBeat.beat_type,
+    open_thread_count: session.plot_state.open_threads.length,
     proposal_count: 0,
     valid_choice_count: 0,
-    prompt_version: 1,
+    prompt_version: 2,
     schema_version: 1,
   };
 
@@ -233,6 +257,21 @@ export function buildFastTurnPacket(
         ...session.universe,
       },
       story: session.story,
+      plot_context: {
+        active_beat: activeBeat,
+        previous_beat: previousBeat,
+        completed_beat_types: session.plot_state.completed_beat_types,
+        open_threads: session.plot_state.open_threads,
+        discovered_clues: session.plot_state.discovered_clues,
+        last_new_information: session.plot_state.last_new_information,
+        required_character_ids: activeCharacterIds,
+        novelty_rules: [
+          "Resolve the committed consequence, then execute the active beat.",
+          "Introduce the active beat's development and reveal.",
+          "Do not repeat the previous location, objective, or central question.",
+          "Answer or materially narrow one open thread and raise the active beat's story question.",
+        ],
+      },
       committed_event: {
         event_id: event.event_id,
         command_type: event.command_type,
@@ -242,8 +281,11 @@ export function buildFastTurnPacket(
       current_state: session.state,
       active_scene: {
         scene_id: scene.scene_id,
+        title: scene.title,
         location: scene.location,
         situation: scene.situation,
+        scene_goal: scene.scene_goal,
+        new_information: scene.new_information,
         present_character_ids: scene.present_character_ids,
       },
       character_views: characterViews,
@@ -266,11 +308,37 @@ export function validateStoryTurnReferences(
   session: WorldSession,
   draft: StoryTurnDraft,
 ): StoryTurnDraft {
-  const scene = currentScene(session);
+  const beat = currentPlotBeat(session);
   const existingIds = new Set(session.characters.map((character) => character.character_id));
-  const presentIds = new Set(scene.present_character_ids);
+  const presentIds = new Set(characterIdsForBeat(session, beat));
+  const resolvedThread =
+    draft.thread_resolved &&
+    session.plot_state.open_threads.find(
+      (thread) =>
+        normalizeText(thread) === normalizeText(draft.thread_resolved ?? ""),
+    );
+  const openedThread =
+    draft.thread_opened &&
+    !session.plot_state.open_threads.some(
+      (thread) =>
+        normalizeText(thread) === normalizeText(draft.thread_opened ?? ""),
+    )
+      ? draft.thread_opened
+      : beat.story_question;
+  const newInformation =
+    normalizeText(draft.new_information) ===
+    normalizeText(session.plot_state.last_new_information ?? "")
+      ? beat.reveal
+      : draft.new_information;
 
   return {
+    scene_title: draft.scene_title,
+    location: beat.location,
+    situation: draft.situation,
+    scene_goal: beat.objective,
+    new_information: newInformation,
+    thread_opened: openedThread,
+    thread_resolved: resolvedThread ?? null,
     narration: draft.narration,
     dialogue: draft.dialogue.filter(
       (line) =>
@@ -297,9 +365,86 @@ export function validateStoryTurnReferences(
       }
 
       const targetId = proposal.arguments.target_id;
-      return !targetId || (existingIds.has(targetId) && presentIds.has(targetId));
+      return !targetId || existingIds.has(targetId);
     }),
   };
+}
+
+export function advancePlotForEvent(
+  session: WorldSession,
+  event: StoryEvent,
+): WorldSession {
+  const previousIndex = session.plot_state.current_beat_index;
+  const nextIndex = Math.min(
+    previousIndex + 1,
+    session.plot_outline.beats.length - 1,
+  );
+  const previousBeat = session.plot_outline.beats[previousIndex];
+  const nextBeat = session.plot_outline.beats[nextIndex];
+
+  if (nextIndex !== previousIndex) {
+    if (
+      !session.plot_state.completed_beat_types.includes(previousBeat.beat_type)
+    ) {
+      session.plot_state.completed_beat_types.push(previousBeat.beat_type);
+    }
+    session.plot_state.current_beat_index = nextIndex;
+    session.plot_state.last_transition = {
+      from_beat: previousBeat.beat_type,
+      to_beat: nextBeat.beat_type,
+    };
+    event.summary = `${event.summary} The story advances into ${nextBeat.title}.`;
+  }
+
+  for (const characterId of characterIdsForBeat(session, nextBeat)) {
+    if (session.state.character_statuses[characterId] === "absent") {
+      session.state.character_statuses[characterId] = "active";
+      addEventEffect(
+        event,
+        `character_statuses.${characterId}`,
+        "absent",
+        "active",
+      );
+    }
+  }
+
+  if (nextBeat.beat_type === "climax") {
+    if (session.state.story_progress !== 100) {
+      addEventEffect(
+        event,
+        "story_progress",
+        session.state.story_progress,
+        100,
+      );
+      session.state.story_progress = 100;
+    }
+    if (session.state.goal_status !== "completed") {
+      addEventEffect(event, "goal_status", session.state.goal_status, "completed");
+      session.state.goal_status = "completed";
+    }
+  }
+
+  session.updated_at = new Date().toISOString();
+  return session;
+}
+
+export function isRepetitiveStoryTurn(
+  session: WorldSession,
+  draft: StoryTurnDraft,
+): boolean {
+  const recentScenes = session.scenes.slice(-3);
+  const repeatedNarration = recentScenes.some(
+    (scene) => wordOverlap(scene.narration, draft.narration) > 0.72,
+  );
+  const previousScene = currentScene(session);
+  const unchangedScene =
+    normalizeText(previousScene.location) === normalizeText(draft.location) &&
+    normalizeText(previousScene.scene_goal) === normalizeText(draft.scene_goal) &&
+    normalizeText(previousScene.situation) === normalizeText(draft.situation);
+  const repeatedInformation =
+    normalizeText(draft.new_information) ===
+    normalizeText(session.plot_state.last_new_information ?? "");
+  return repeatedNarration || (unchangedScene && repeatedInformation);
 }
 
 export function appendStoryTurn(
@@ -309,6 +454,8 @@ export function appendStoryTurn(
 ): WorldSession {
   const draft = validateStoryTurnReferences(session, rawDraft);
   const previousScene = currentScene(session);
+  const beat = currentPlotBeat(session);
+  const presentCharacterIds = characterIdsForBeat(session, beat);
   const sceneId = createId("scene");
   const fallbackByAxis = defaultNextChoices(session);
   const proposals = new Map<
@@ -344,9 +491,14 @@ export function appendStoryTurn(
   const nextScene: Scene = {
     scene_id: sceneId,
     scene_index: previousScene.scene_index + 1,
-    location: previousScene.location,
-    situation: event.summary,
-    present_character_ids: previousScene.present_character_ids,
+    title: draft.scene_title,
+    location: beat.location,
+    situation: draft.situation,
+    scene_goal: beat.objective,
+    new_information: draft.new_information,
+    thread_opened: draft.thread_opened,
+    thread_resolved: draft.thread_resolved,
+    present_character_ids: presentCharacterIds,
     narration: draft.narration,
     dialogue: draft.dialogue,
     choice_ids: choices.map((choice) => choice.choice_id),
@@ -356,6 +508,32 @@ export function appendStoryTurn(
   session.scenes.push(nextScene);
   session.choices.push(...choices);
   session.current_scene_id = sceneId;
+  if (draft.thread_resolved) {
+    session.plot_state.open_threads = session.plot_state.open_threads.filter(
+      (thread) =>
+        normalizeText(thread) !== normalizeText(draft.thread_resolved ?? ""),
+    );
+  }
+  const nextThread = draft.thread_opened ?? beat.story_question;
+  session.plot_state.open_threads = [
+    ...session.plot_state.open_threads.filter(
+      (thread) => normalizeText(thread) !== normalizeText(nextThread),
+    ),
+    nextThread,
+  ].slice(-3);
+  session.plot_state.discovered_clues = [
+    ...session.plot_state.discovered_clues.filter(
+      (clue) => normalizeText(clue) !== normalizeText(draft.new_information),
+    ),
+    draft.new_information,
+  ].slice(-6);
+  session.plot_state.last_new_information = draft.new_information;
+  session.plot_state.recent_locations = [
+    ...session.plot_state.recent_locations.filter(
+      (location) => normalizeText(location) !== normalizeText(beat.location),
+    ),
+    beat.location,
+  ].slice(-3);
   session.updated_at = new Date().toISOString();
   if (session.last_context_trace) {
     session.last_context_trace.proposal_count = rawDraft.choice_proposals.length;
@@ -376,6 +554,21 @@ export function toWorldView(session: WorldSession): WorldView {
     universe: session.universe,
     story: session.story,
     semantic_labels: session.semantic_labels,
+    plot_progress: {
+      current_beat_index: session.plot_state.current_beat_index,
+      total_beats: session.plot_outline.beats.length,
+      current_beat: {
+        beat_type: currentPlotBeat(session).beat_type,
+        title: currentPlotBeat(session).title,
+        location: currentPlotBeat(session).location,
+        objective: currentPlotBeat(session).objective,
+        story_question: currentPlotBeat(session).story_question,
+      },
+      completed_beat_types: session.plot_state.completed_beat_types,
+      open_threads: session.plot_state.open_threads,
+      discovered_clues: session.plot_state.discovered_clues,
+      last_new_information: session.plot_state.last_new_information,
+    },
     state: session.state,
     scene,
     choices: session.choices.filter(
@@ -431,10 +624,9 @@ function isLegalProposal(
   session: WorldSession,
   proposal: StoryTurnDraft["choice_proposals"][number],
 ): boolean {
-  const scene = currentScene(session);
   const targetId = proposal.arguments.target_id;
   if (proposal.command_type === "pursue_goal") return !targetId;
-  if (!targetId || !scene.present_character_ids.includes(targetId)) return false;
+  if (!targetId) return false;
   if (proposal.command_type === "confront_character") {
     return (
       targetId === session.state.active_threat_id &&
@@ -444,6 +636,80 @@ function isLegalProposal(
   return ["in_danger", "safe", "active", "unavailable"].includes(
     session.state.character_statuses[targetId],
   );
+}
+
+function currentPlotBeat(session: WorldSession): PlotBeat {
+  return session.plot_outline.beats[session.plot_state.current_beat_index];
+}
+
+function characterIdsForBeat(
+  session: WorldSession,
+  beat: PlotBeat,
+): string[] {
+  return beat.present_character_prototypes
+    .map(
+      (prototype) =>
+        session.characters.find(
+          (character) => character.prototype === prototype,
+        )?.character_id,
+    )
+    .filter((characterId): characterId is string => Boolean(characterId));
+}
+
+function addEventEffect(
+  event: StoryEvent,
+  path: string,
+  from: string | number,
+  to: string | number,
+): void {
+  const existing = event.effects.find((effect) => effect.path === path);
+  if (existing) {
+    existing.to = to;
+    return;
+  }
+  event.effects.push({ path, from, to });
+}
+
+function normalizeText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function wordOverlap(left: string, right: string): number {
+  const stopWords = new Set([
+    "the",
+    "a",
+    "an",
+    "and",
+    "or",
+    "to",
+    "of",
+    "in",
+    "is",
+    "it",
+    "you",
+    "your",
+    "that",
+    "with",
+    "as",
+    "for",
+  ]);
+  const leftWords = new Set(
+    normalizeText(left)
+      .split(" ")
+      .filter((word) => word.length > 2 && !stopWords.has(word)),
+  );
+  const rightWords = new Set(
+    normalizeText(right)
+      .split(" ")
+      .filter((word) => word.length > 2 && !stopWords.has(word)),
+  );
+  if (leftWords.size === 0 || rightWords.size === 0) return 0;
+  const shared = [...leftWords].filter((word) => rightWords.has(word)).length;
+  return shared / Math.min(leftWords.size, rightWords.size);
 }
 
 function defaultNextChoices(

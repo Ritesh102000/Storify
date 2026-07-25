@@ -611,9 +611,14 @@ function PlayerScreen({
       <div className="player-header">
         <div>
           <p className="eyebrow">
-            Turn {world.state.turn_index} · {world.universe.genre}
+            Chapter {world.plot_progress.current_beat_index + 1} of{" "}
+            {world.plot_progress.total_beats} ·{" "}
+            {world.plot_progress.current_beat.beat_type}
           </p>
           <h1>{world.universe.title}</h1>
+          <p className="chapter-title">
+            {world.plot_progress.current_beat.title}
+          </p>
         </div>
         <div className="player-actions">
           <button className="secondary" onClick={listen} disabled={busy}>
@@ -626,7 +631,15 @@ function PlayerScreen({
       </div>
 
       <div className="progress" aria-label="Story progress">
-        <span style={{ width: `${world.state.story_progress}%` }} />
+        <span
+          style={{
+            width: `${
+              (world.plot_progress.current_beat_index /
+                (world.plot_progress.total_beats - 1)) *
+              100
+            }%`,
+          }}
+        />
       </div>
       <div className="player-layout">
         <div className="story-column">
@@ -639,6 +652,11 @@ function PlayerScreen({
                   : "Deterministic fallback"}
               </span>
             </div>
+            <h2 className="scene-title">{world.scene.title}</h2>
+            <p className="scene-goal">
+              <strong>Current objective</strong>
+              {world.scene.scene_goal}
+            </p>
             <p className="narration">{world.scene.narration}</p>
             {world.scene.dialogue.map((line) => (
               <blockquote key={`${line.character_id}-${line.text}`}>
@@ -646,6 +664,12 @@ function PlayerScreen({
                 {line.text}
               </blockquote>
             ))}
+            {world.scene.new_information ? (
+              <div className="discovery">
+                <strong>New discovery</strong>
+                <span>{world.scene.new_information}</span>
+              </div>
+            ) : null}
             {audioUrl ? (
               <div className="audio-wrap">
                 <audio id="story-audio" controls src={audioUrl} />
@@ -713,7 +737,10 @@ function PlayerScreen({
             </div>
             <div>
               <small>Progress</small>
-              <strong>{world.state.story_progress}%</strong>
+              <strong>
+                {world.plot_progress.current_beat_index + 1}/
+                {world.plot_progress.total_beats}
+              </strong>
             </div>
             <div>
               <small>Memories</small>
@@ -725,6 +752,28 @@ function PlayerScreen({
               </strong>
             </div>
           </div>
+
+          <details className="trace" open>
+            <summary>Plot threads</summary>
+            <h4>Questions still open</h4>
+            <ul className="thread-list">
+              {world.plot_progress.open_threads.map((thread) => (
+                <li key={thread}>{thread}</li>
+              ))}
+            </ul>
+            {world.plot_progress.discovered_clues.length ? (
+              <>
+                <h4>Discoveries</h4>
+                <ul className="thread-list clues">
+                  {world.plot_progress.discovered_clues
+                    .slice(-3)
+                    .map((clue) => (
+                      <li key={clue}>{clue}</li>
+                    ))}
+                </ul>
+              </>
+            ) : null}
+          </details>
 
           <h2>Living characters</h2>
           <div className="character-stack">
@@ -783,6 +832,10 @@ function PlayerScreen({
             <details className="trace">
               <summary>Context trace</summary>
               <dl>
+                <div>
+                  <dt>Active plot beat</dt>
+                  <dd>{world.context_trace.plot_beat}</dd>
+                </div>
                 <div>
                   <dt>Recent events</dt>
                   <dd>{world.context_trace.recent_event_ids.length}</dd>

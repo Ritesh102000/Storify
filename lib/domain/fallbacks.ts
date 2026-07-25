@@ -134,10 +134,22 @@ export function fallbackStoryTurn(
   )!;
   const objective = session.semantic_labels.objective_label;
   const relationship = session.state.relationships[ally.character_id];
+  const beat =
+    session.plot_outline.beats[session.plot_state.current_beat_index];
+  const plotFields = {
+    scene_title: beat.title,
+    location: beat.location,
+    situation: `${beat.development} ${beat.obstacle}`,
+    scene_goal: beat.objective,
+    new_information: beat.reveal,
+    thread_opened: beat.story_question,
+    thread_resolved: session.plot_state.open_threads[0] ?? null,
+  };
 
   if (event.command_type === "help_character") {
     return {
-      narration: `The danger closes behind you as ${ally.name} finds their footing. The cost becomes clear immediately: ${objective} is gone, carried deeper into ${session.universe.title}. ${rival.name} does not chase. They watch, measuring the choice you made and what it reveals about you. Around you, ${session.semantic_labels.danger_label} settles into an uneasy silence. The main goal is still alive, but its path has changed.`,
+      ...plotFields,
+      narration: `Your decision to protect ${ally.name} follows you into ${beat.location}, where ${beat.development.toLowerCase()} The immediate cost remains: ${objective} is no longer where you left it. ${beat.obstacle} Then the story yields something genuinely new: ${beat.reveal} The old question cannot hold the investigation anymore. Now you must ask: ${beat.story_question}`,
       dialogue: [
         {
           character_id: ally.character_id,
@@ -176,7 +188,8 @@ export function fallbackStoryTurn(
 
   if (event.command_type === "pursue_goal") {
     return {
-      narration: `${objective} is finally in your hands, cold with the weight of what it can expose. Behind you, the route back to ${ally.name} closes. ${rival.name} steps aside, not defeated but newly cautious. Progress has a shape now, and so does its cost. The world around you seems to hold its breath as the next layer of the central mystery comes within reach.`,
+      ...plotFields,
+      narration: `The pursuit carries you out of the previous crisis and into ${beat.location}. ${beat.development} Securing ${objective} gives you leverage, but ${beat.obstacle.toLowerCase()} The breakthrough changes the shape of the mystery: ${beat.reveal} What happened before still matters, yet the plot now turns on a new question: ${beat.story_question}`,
       dialogue: [
         {
           character_id: rival.character_id,
@@ -210,7 +223,8 @@ export function fallbackStoryTurn(
     (fact) => fact.character_id === rival.character_id,
   );
   return {
-    narration: `${rival.name}'s composure fractures for one revealing second. The confrontation does not remove the threat, but it exposes a truth the world had kept sealed: ${revealedFact?.text ?? "the rival knows more than they admitted"}. ${ally.name} hears it too. The objective remains within reach, and the tension between all three of you sharpens into a decision that cannot be delayed.`,
+    ...plotFields,
+    narration: `Your confrontation changes the route through ${session.universe.title} and drives everyone toward ${beat.location}. ${rival.name}'s composure fractures around one truth: ${revealedFact?.text ?? "the rival knows more than they admitted"}. But the argument cannot remain the whole story. ${beat.development} ${beat.obstacle} The next discovery breaks the loop: ${beat.reveal} Now the central question becomes: ${beat.story_question}`,
     dialogue: [
       {
         character_id: rival.character_id,
@@ -249,6 +263,10 @@ function applyKnownCustomization(
     seed.universe.title = `${seed.universe.title}: Mumbai 2095`;
     seed.universe.premise = `In Mumbai in 2095, ${lowercaseFirst(seed.universe.premise)}`;
     seed.opening_scene.location = `Mumbai 2095 · ${seed.opening_scene.location}`;
+    seed.plot_outline.beats = seed.plot_outline.beats.map((beat) => ({
+      ...beat,
+      location: `Mumbai 2095 · ${beat.location}`,
+    }));
   }
   if (/older sister|elder sister/.test(normalized)) {
     const rival = seed.characters.find(

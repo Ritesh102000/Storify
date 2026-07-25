@@ -1,9 +1,12 @@
 import { commitChoice } from "@/lib/domain/commands";
 import {
+  advancePlotForEvent,
   appendStoryTurn,
   buildFastTurnPacket,
+  isRepetitiveStoryTurn,
   toWorldView,
 } from "@/lib/domain/state";
+import { fallbackStoryTurn } from "@/lib/domain/fallbacks";
 import { chooseRequestSchema } from "@/lib/schemas";
 import { ApiError, errorResponse } from "@/lib/server/api";
 import { generateStoryTurn } from "@/lib/server/openai";
@@ -28,6 +31,7 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     const committed = commitChoice(current, input.choice_id);
+    advancePlotForEvent(committed.session, committed.event);
     const { packet, trace } = buildFastTurnPacket(
       committed.session,
       committed.event,
@@ -38,6 +42,21 @@ export async function POST(request: Request, context: RouteContext) {
       committed.event,
       packet,
     );
+    if (isRepetitiveStoryTurn(committed.session, generated.draft)) {
+      generated.draft = fallbackStoryTurn(
+        committed.session,
+        committed.event,
+      );
+      generated.generation = {
+        ...generated.generation,
+        status: "layered_fallback",
+        provider: "fixture",
+        model: "plot-progression-fallback",
+        used_fallback: true,
+        fallback_reason:
+          "The generated scene repeated recent narration or plot information.",
+      };
+    }
     const updated = appendStoryTurn(
       committed.session,
       committed.event,

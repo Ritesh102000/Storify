@@ -27,6 +27,15 @@ export type GenerationStatus =
   | "layered_fallback"
   | "template_fallback"
   | "fixture";
+export const PLOT_BEAT_TYPES = [
+  "setup",
+  "pursuit",
+  "reveal",
+  "reversal",
+  "crisis",
+  "climax",
+] as const;
+export type PlotBeatType = (typeof PLOT_BEAT_TYPES)[number];
 
 export type CharacterDraft = {
   prototype: Prototype;
@@ -65,6 +74,11 @@ export type WorldSeedDraft = {
     tone_guardrails: string[];
     opening_hook: string;
   };
+  plot_outline: {
+    theme: string;
+    ending_direction: string;
+    beats: PlotBeat[];
+  };
   characters: CharacterDraft[];
   opening_scene: {
     location: string;
@@ -76,6 +90,31 @@ export type WorldSeedDraft = {
   };
   opening_narration: string;
   first_choice_proposals: ChoiceProposal[];
+};
+
+export type PlotBeat = {
+  beat_type: PlotBeatType;
+  title: string;
+  location: string;
+  objective: string;
+  obstacle: string;
+  development: string;
+  reveal: string;
+  story_question: string;
+  present_character_prototypes: Prototype[];
+};
+
+export type PlotState = {
+  current_beat_index: number;
+  completed_beat_types: PlotBeatType[];
+  open_threads: string[];
+  discovered_clues: string[];
+  last_new_information: string | null;
+  recent_locations: string[];
+  last_transition: {
+    from_beat: PlotBeatType;
+    to_beat: PlotBeatType;
+  } | null;
 };
 
 export type WorldSetupInput = {
@@ -163,8 +202,13 @@ export type Choice = {
 export type Scene = {
   scene_id: string;
   scene_index: number;
+  title: string;
   location: string;
   situation: string;
+  scene_goal: string;
+  new_information: string | null;
+  thread_opened: string | null;
+  thread_resolved: string | null;
   present_character_ids: string[];
   narration: string;
   dialogue: Array<{
@@ -218,9 +262,11 @@ export type ContextTrace = {
   memory_ids: string[];
   unlocked_fact_ids: string[];
   state_fields: string[];
+  plot_beat: PlotBeatType;
+  open_thread_count: number;
   proposal_count: number;
   valid_choice_count: number;
-  prompt_version: 1;
+  prompt_version: 2;
   schema_version: 1;
 };
 
@@ -253,6 +299,18 @@ export type WorldView = {
   universe: WorldSession["universe"];
   story: WorldSession["story"];
   semantic_labels: WorldSession["semantic_labels"];
+  plot_progress: {
+    current_beat_index: number;
+    total_beats: number;
+    current_beat: Pick<
+      PlotBeat,
+      "beat_type" | "title" | "location" | "objective" | "story_question"
+    >;
+    completed_beat_types: PlotBeatType[];
+    open_threads: string[];
+    discovered_clues: string[];
+    last_new_information: string | null;
+  };
   state: GameState;
   scene: Scene;
   choices: Choice[];
@@ -271,6 +329,8 @@ export type WorldSession = {
   template_id: TemplateId;
   universe: WorldSeedDraft["universe"];
   story: WorldSeedDraft["story"];
+  plot_outline: WorldSeedDraft["plot_outline"];
+  plot_state: PlotState;
   semantic_labels: {
     objective_label: string;
     danger_label: string;
@@ -293,6 +353,13 @@ export type WorldSession = {
 };
 
 export type StoryTurnDraft = {
+  scene_title: string;
+  location: string;
+  situation: string;
+  scene_goal: string;
+  new_information: string;
+  thread_opened: string | null;
+  thread_resolved: string | null;
   narration: string;
   dialogue: Array<{
     character_id: string;
@@ -314,6 +381,16 @@ export type FastTurnPacket = {
     universe_id: string;
   };
   story: WorldSession["story"];
+  plot_context: {
+    active_beat: PlotBeat;
+    previous_beat: PlotBeat;
+    completed_beat_types: PlotBeatType[];
+    open_threads: string[];
+    discovered_clues: string[];
+    last_new_information: string | null;
+    required_character_ids: string[];
+    novelty_rules: string[];
+  };
   committed_event: Pick<
     StoryEvent,
     "event_id" | "command_type" | "summary"
@@ -324,7 +401,13 @@ export type FastTurnPacket = {
   current_state: GameState;
   active_scene: Pick<
     Scene,
-    "scene_id" | "location" | "situation" | "present_character_ids"
+    | "scene_id"
+    | "title"
+    | "location"
+    | "situation"
+    | "scene_goal"
+    | "new_information"
+    | "present_character_ids"
   >;
   character_views: Array<{
     character_id: string;

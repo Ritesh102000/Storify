@@ -12,6 +12,14 @@ export const commandTypeSchema = z.enum([
   "pursue_goal",
   "confront_character",
 ]);
+export const plotBeatTypeSchema = z.enum([
+  "setup",
+  "pursuit",
+  "reveal",
+  "reversal",
+  "crisis",
+  "climax",
+]);
 
 const shortText = z.string().trim().min(1).max(180);
 const paragraph = z.string().trim().min(1).max(900);
@@ -40,6 +48,23 @@ export const choiceProposalSchema = z
   })
   .strict();
 
+export const plotBeatSchema = z
+  .object({
+    beat_type: plotBeatTypeSchema,
+    title: z.string().trim().min(1).max(80),
+    location: shortText,
+    objective: shortText,
+    obstacle: paragraph,
+    development: paragraph,
+    reveal: paragraph,
+    story_question: shortText,
+    present_character_prototypes: z
+      .array(prototypeSchema)
+      .min(1)
+      .max(3),
+  })
+  .strict();
+
 export const worldSeedDraftSchema = z
   .object({
     base_template_id: templateIdSchema,
@@ -60,6 +85,13 @@ export const worldSeedDraftSchema = z
         central_question: shortText,
         tone_guardrails: z.array(shortText).max(3),
         opening_hook: shortText,
+      })
+      .strict(),
+    plot_outline: z
+      .object({
+        theme: shortText,
+        ending_direction: paragraph,
+        beats: z.array(plotBeatSchema).length(6),
       })
       .strict(),
     characters: z.array(characterDraftSchema).length(3),
@@ -106,6 +138,44 @@ export const worldSeedDraftSchema = z
         });
       }
     }
+
+    const expectedBeats = [
+      "setup",
+      "pursuit",
+      "reveal",
+      "reversal",
+      "crisis",
+      "climax",
+    ];
+    const actualBeats = value.plot_outline.beats.map((beat) => beat.beat_type);
+    if (actualBeats.some((beat, index) => beat !== expectedBeats[index])) {
+      context.addIssue({
+        code: "custom",
+        path: ["plot_outline", "beats"],
+        message:
+          "Plot beats must be setup, pursuit, reveal, reversal, crisis, and climax in order.",
+      });
+    }
+    const distinctLocations = new Set(
+      value.plot_outline.beats.map((beat) => beat.location.toLowerCase()),
+    );
+    if (distinctLocations.size < 4) {
+      context.addIssue({
+        code: "custom",
+        path: ["plot_outline", "beats"],
+        message: "The plot must use at least four distinct locations.",
+      });
+    }
+    const distinctDevelopments = new Set(
+      value.plot_outline.beats.map((beat) => beat.development.toLowerCase()),
+    );
+    if (distinctDevelopments.size !== 6) {
+      context.addIssue({
+        code: "custom",
+        path: ["plot_outline", "beats"],
+        message: "Every beat must introduce a distinct development.",
+      });
+    }
   });
 
 export const worldSetupInputSchema = z
@@ -136,6 +206,13 @@ export const worldSetupInputSchema = z
 
 export const storyTurnDraftSchema = z
   .object({
+    scene_title: z.string().trim().min(1).max(100),
+    location: shortText,
+    situation: paragraph,
+    scene_goal: shortText,
+    new_information: paragraph,
+    thread_opened: shortText.nullable(),
+    thread_resolved: shortText.nullable(),
     narration: z.string().trim().min(20).max(1600),
     dialogue: z
       .array(
