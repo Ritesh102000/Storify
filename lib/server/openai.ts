@@ -32,6 +32,9 @@ import {
 import { retrieveForWorld } from "./retrieval";
 
 const STORY_MODEL = process.env.OPENAI_STORY_MODEL || "gpt-5.6-sol";
+const WORLD_MODEL = process.env.OPENAI_WORLD_MODEL || "gpt-5.6-terra";
+const WORLD_REASONING_EFFORT =
+  process.env.OPENAI_WORLD_REASONING_EFFORT || "medium";
 const SPEECH_MODEL = "gpt-4o-mini-tts";
 const MODERATION_MODEL = "omni-moderation-latest";
 
@@ -63,8 +66,10 @@ export async function generateWorldPreview(
     try {
       const response = await client.responses.parse(
         {
-          model: STORY_MODEL,
-          reasoning: { effort: "none" },
+          model: WORLD_MODEL,
+          reasoning: {
+            effort: WORLD_REASONING_EFFORT as "low" | "medium" | "high",
+          },
           instructions: WORLD_BUILDER_INSTRUCTIONS,
           input: JSON.stringify({
             user_setup: input,
@@ -77,7 +82,6 @@ export async function generateWorldPreview(
           max_output_tokens: 5600,
           store: false,
         },
-        { signal: AbortSignal.timeout(35_000) },
       );
       if (!response.output_parsed) {
         throw new Error("OpenAI returned no parsed world.");
@@ -85,7 +89,7 @@ export async function generateWorldPreview(
       seed = worldSeedDraftSchema.parse(response.output_parsed);
       status = "generated";
       provider = "openai";
-      model = STORY_MODEL;
+      model = WORLD_MODEL;
     } catch (error) {
       status = "layered_fallback";
       provider = "fixture";
@@ -101,6 +105,7 @@ export async function generateWorldPreview(
     resolved_template_id: seed.base_template_id,
     seed,
     creative_diffs: creativeDiffs(seed.base_template_id, seed),
+    creativity: input.creativity ?? "balanced",
     retrieval: retrieval.trace,
     generation: {
       status,
@@ -151,7 +156,6 @@ export async function generateStoryTurn(
           max_output_tokens: 3600,
           store: false,
         },
-        { signal: AbortSignal.timeout(15_000) },
       );
       if (!response.output_parsed) {
         throw new Error("OpenAI returned no parsed story turn.");
@@ -250,7 +254,6 @@ export async function generateSpinOff(
         max_output_tokens: 1300,
         store: false,
       },
-      { signal: AbortSignal.timeout(15_000) },
     );
     const parsed = spinOffDraftSchema.parse(response.output_parsed);
     await logGeneration({
@@ -288,7 +291,6 @@ export async function synthesizeSpeech(text: string): Promise<ArrayBuffer> {
         "Perform as an intimate cinematic audio-story narrator. Clear, restrained, and emotionally grounded.",
       response_format: "mp3",
     },
-    { signal: AbortSignal.timeout(25_000) },
   );
   await logGeneration({
     operation: "speech",
@@ -304,7 +306,13 @@ export async function synthesizeSpeech(text: string): Promise<ArrayBuffer> {
 function openAIClient(): OpenAI | null {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey || process.env.OPENAI_FIXTURE_MODE === "true") return null;
-  return new OpenAI({ apiKey });
+  return new OpenAI({
+    apiKey,
+    // Quality over latency: a slow response is still a good scene, but an
+    // aborted one is always a template fallback. Well beyond any real call.
+    timeout: 30 * 60 * 1000,
+    maxRetries: 4,
+  });
 }
 
 async function moderateCreativeInput(

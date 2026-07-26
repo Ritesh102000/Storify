@@ -269,7 +269,7 @@ function normalize(value) {
 }
 
 function loadLocalEnv() {
-  const filename = path.join(projectRoot, ".env.local");
+  const filename = path.join(projectRoot, ".env");
   return readFile(filename, "utf8")
     .then((contents) => {
       for (const line of contents.split(/\r?\n/)) {

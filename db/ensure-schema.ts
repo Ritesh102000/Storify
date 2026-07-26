@@ -30,6 +30,16 @@ const statements = [
     used_fallback TEXT NOT NULL,
     created_at TEXT NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS detective_sessions (
+    case_id TEXT PRIMARY KEY,
+    revision INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS detective_sessions_updated_idx
+    ON detective_sessions(updated_at)`,
 ];
 
 export async function ensureSchema(): Promise<void> {

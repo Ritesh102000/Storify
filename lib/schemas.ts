@@ -55,6 +55,18 @@ export const milestoneContractSchema = z
   })
   .strict();
 
+const storyletSchema = z.object({
+  storylet_id: z.string().trim().min(1).max(100),
+  template_id: templateIdSchema,
+  milestone_types: z.array(milestoneTypeSchema).min(1).max(7),
+  compatible_axes: z.array(axisSchema).min(1).max(3),
+  situation: paragraph,
+  concrete_affordance: shortText,
+  pressure: shortText,
+  discovery_form: shortText,
+  character_conflict: shortText,
+}).strict();
+
 export const worldSeedDraftSchema = z
   .object({
     base_template_id: templateIdSchema,
@@ -84,6 +96,7 @@ export const worldSeedDraftSchema = z
         milestones: z.array(milestoneContractSchema).length(7),
       })
       .strict(),
+    storylet_deck: z.array(storyletSchema).length(6),
     characters: z.array(characterDraftSchema).length(3),
     opening_scene: z
       .object({
@@ -132,6 +145,25 @@ export const worldSeedDraftSchema = z
         message: "Milestones must use the canonical seven-stage order.",
       });
     }
+    const storyletIds = value.storylet_deck.map(
+      (storylet) => storylet.storylet_id,
+    );
+    if (new Set(storyletIds).size !== storyletIds.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["storylet_deck"],
+        message: "Storylet IDs must be unique.",
+      });
+    }
+    value.storylet_deck.forEach((storylet, index) => {
+      if (storylet.template_id !== value.base_template_id) {
+        context.addIssue({
+          code: "custom",
+          path: ["storylet_deck", index, "template_id"],
+          message: "Every storylet must match the resolved base template.",
+        });
+      }
+    });
   });
 
 export const worldSetupInputSchema = z
@@ -155,6 +187,9 @@ export const worldSetupInputSchema = z
     customization_prompt: z.string().trim().max(1000),
     language: z.string().trim().min(2).max(32),
     content_tone: z.enum(["family_safe", "mature"]),
+    creativity: z
+      .enum(["grounded", "balanced", "vivid"])
+      .default("balanced"),
   })
   .strict();
 
@@ -164,12 +199,41 @@ const dialogueLineSchema = z.object({
   responds_to_previous: z.boolean(),
 }).strict();
 
+const storyBlockSchema = z.object({
+  block_type: z.enum(["narration", "dialogue"]),
+  character_id: z.string().trim().min(1).max(80).nullable(),
+  text: z.string().trim().min(1).max(600),
+  responds_to_previous: z.boolean(),
+}).strict();
+
+const causalChainSchema = z.object({
+  chosen_action_result: shortText,
+  cost_paid: shortText,
+  observable_clue: shortText,
+  new_hypothesis: shortText,
+  next_pressure: shortText,
+}).strict();
+
+const characterMoveSchema = z.object({
+  character_id: z.string().trim().min(1).max(80),
+  want_now: shortText,
+  belief_before: shortText,
+  belief_after: shortText,
+  emotion_after: z.string().trim().min(1).max(80),
+  tactic: shortText,
+  relationship_move: shortText,
+  spoken_intent: shortText,
+}).strict();
+
 export const storyTurnDraftSchema = z
   .object({
     because_of_choice: paragraph,
     immediate_consequence: paragraph,
     time_passed: shortText,
     transition_reason: paragraph,
+    storylet_id: z.string().trim().min(1).max(100),
+    causal_chain: causalChainSchema,
+    character_moves: z.array(characterMoveSchema).min(2).max(3),
     milestone_action: z.enum(["continue", "complete"]),
     milestone_completion_evidence: paragraph.nullable(),
     scene_title: z.string().trim().min(1).max(100),
@@ -180,8 +244,9 @@ export const storyTurnDraftSchema = z
     thread_opened: shortText.nullable(),
     thread_resolved: shortText.nullable(),
     present_character_ids: z.array(z.string().trim().min(1).max(80)).min(2).max(3),
-    narration: z.string().trim().min(40).max(2400),
-    dialogue: z.array(dialogueLineSchema).min(4).max(8),
+    narration: z.string().trim().min(40).max(4000),
+    dialogue: z.array(dialogueLineSchema).min(3).max(8),
+    story_blocks: z.array(storyBlockSchema).min(7).max(18),
     choice_proposals: z
       .array(
         z.object({
@@ -198,6 +263,14 @@ export const storyTurnDraftSchema = z
       .length(3),
   })
   .strict();
+
+// The simulator renderer emits one presentation source of truth. Narration and
+// dialogue projections are derived server-side from these ordered blocks so the
+// model never has to duplicate prose or split sentences to keep copies aligned.
+export const rendererStoryTurnSchema = storyTurnDraftSchema.omit({
+  narration: true,
+  dialogue: true,
+});
 
 export const chooseRequestSchema = z.object({
   branch_id: z.string().trim().min(1),

@@ -20,13 +20,34 @@ export async function POST(_request: Request, context: RouteContext) {
         character.name,
       ]),
     );
-    const script = [
-      scene.narration,
-      ...scene.dialogue.map(
-        (line) =>
-          `${characterNames.get(line.character_id) ?? "Character"}: ${line.text}`,
-      ),
-    ].join("\n");
+    // Preserve the same narrator/dialogue order shown in the reader. The old
+    // route put all narration first and all dialogue last, which changed the
+    // meaning of the scene when it was spoken.
+    const orderedBlocks = scene.story_blocks?.length
+      ? scene.story_blocks
+      : [
+          {
+            block_type: "narration" as const,
+            character_id: null,
+            text: scene.narration,
+            responds_to_previous: false,
+          },
+          ...scene.dialogue.map((line) => ({
+            block_type: "dialogue" as const,
+            character_id: line.character_id,
+            text: line.text,
+            responds_to_previous: line.responds_to_previous,
+          })),
+        ];
+    const script = orderedBlocks
+      .map((block) =>
+        block.block_type === "dialogue" && block.character_id
+          ? `${characterNames.get(block.character_id) ?? "Character"} says: ${
+              block.text
+            }`
+          : block.text,
+      )
+      .join("\n");
     const audio = await synthesizeSpeech(script);
     return new Response(audio, {
       headers: {

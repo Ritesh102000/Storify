@@ -1,3 +1,5 @@
+import type { SimulationCommit, SimulationState } from "./simulation/types";
+
 export const TEMPLATE_IDS = [
   "blackmoor",
   "neon_afterlight",
@@ -99,6 +101,7 @@ export type WorldSeedDraft = {
     ending_direction: string;
     milestones: MilestoneContract[];
   };
+  storylet_deck: Storylet[];
   characters: CharacterDraft[];
   opening_scene: {
     location: string;
@@ -128,7 +131,13 @@ export type WorldSetupInput = {
   customization_prompt: string;
   language: string;
   content_tone: "family_safe" | "mature";
+  // These models reject a temperature parameter, so listener-facing "creativity"
+  // maps to levers that do work: renderer reasoning effort plus a style
+  // directive. See resolveCreativity in lib/server/creativity.ts.
+  creativity: CreativityLevel;
 };
+
+export type CreativityLevel = "grounded" | "balanced" | "vivid";
 
 export type CreativeDiff = { field: string; before: string; after: string };
 
@@ -150,6 +159,7 @@ export type WorldPreview = {
   resolved_template_id: TemplateId;
   seed: WorldSeedDraft;
   creative_diffs: CreativeDiff[];
+  creativity: CreativityLevel;
   retrieval: RetrievalTrace | null;
   generation: {
     status: GenerationStatus;
@@ -210,6 +220,13 @@ export type DialogueLine = {
   responds_to_previous: boolean;
 };
 
+export type StoryBlock = {
+  block_type: "narration" | "dialogue";
+  character_id: string | null;
+  text: string;
+  responds_to_previous: boolean;
+};
+
 export type Scene = {
   scene_id: string;
   scene_index: number;
@@ -224,12 +241,16 @@ export type Scene = {
   immediate_consequence: string;
   time_passed: string;
   transition_reason: string;
+  storylet_id: string;
+  causal_chain: CausalChain;
+  character_moves: CharacterMove[];
   new_information: string | null;
   thread_opened: string | null;
   thread_resolved: string | null;
   present_character_ids: string[];
   narration: string;
   dialogue: DialogueLine[];
+  story_blocks: StoryBlock[];
   choice_ids: string[];
   created_from_event_id: string | null;
 };
@@ -287,7 +308,47 @@ export type ArcState = {
   last_new_information: string | null;
   recent_locations: string[];
   recent_pattern_ids: string[];
+  recent_storylet_ids: string[];
   status: "active" | "completed";
+};
+
+export type CharacterMindState = {
+  current_goal: string;
+  current_belief: string;
+  current_emotion: string;
+  attitude_to_listener: string;
+  last_changed_event_id: string | null;
+};
+
+export type Storylet = {
+  storylet_id: string;
+  template_id: TemplateId;
+  milestone_types: MilestoneType[];
+  compatible_axes: ChoiceAxis[];
+  situation: string;
+  concrete_affordance: string;
+  pressure: string;
+  discovery_form: string;
+  character_conflict: string;
+};
+
+export type CausalChain = {
+  chosen_action_result: string;
+  cost_paid: string;
+  observable_clue: string;
+  new_hypothesis: string;
+  next_pressure: string;
+};
+
+export type CharacterMove = {
+  character_id: string;
+  want_now: string;
+  belief_before: string;
+  belief_after: string;
+  emotion_after: string;
+  tactic: string;
+  relationship_move: string;
+  spoken_intent: string;
 };
 
 export type ContextTrace = {
@@ -306,7 +367,9 @@ export type ContextTrace = {
   proposal_count: number;
   valid_choice_count: number;
   retrieval: RetrievalTrace;
-  prompt_version: 3;
+  selected_storylet_id: string | null;
+  quality_warnings: string[];
+  prompt_version: 4;
   schema_version: 2;
 };
 
@@ -328,6 +391,7 @@ export type SpinOff = {
 export type PublicCharacterView = Omit<Character, "secret" | "secret_fact_id"> & {
   status: CharacterStatus;
   relationship: Relationship;
+  mind: CharacterMindState;
   memories: CharacterMemory[];
   unlocked_facts: StoryFact[];
 };
@@ -363,6 +427,15 @@ export type WorldView = {
   context_trace: ContextTrace | null;
   spin_offs: SpinOff[];
   generation: WorldPreview["generation"];
+  simulator: {
+    version: number;
+    time_label: string;
+    entity_count: number;
+    canonical_fact_count: number;
+    open_thread_count: number;
+    transition_count: number;
+    last_effects: string[];
+  };
 };
 
 export type WorldSession = {
@@ -374,7 +447,12 @@ export type WorldSession = {
   universe: WorldSeedDraft["universe"];
   story: WorldSeedDraft["story"];
   arc_plan: WorldSeedDraft["arc_plan"];
+  storylet_deck: Storylet[];
+  creativity: CreativityLevel;
   arc_state: ArcState;
+  character_minds: Record<string, CharacterMindState>;
+  simulation: SimulationState;
+  simulation_events: SimulationCommit[];
   semantic_labels: {
     objective_label: string;
     danger_label: string;
@@ -401,6 +479,9 @@ export type StoryTurnDraft = {
   immediate_consequence: string;
   time_passed: string;
   transition_reason: string;
+  storylet_id: string;
+  causal_chain: CausalChain;
+  character_moves: CharacterMove[];
   milestone_action: "continue" | "complete";
   milestone_completion_evidence: string | null;
   scene_title: string;
@@ -413,6 +494,7 @@ export type StoryTurnDraft = {
   present_character_ids: string[];
   narration: string;
   dialogue: DialogueLine[];
+  story_blocks: StoryBlock[];
   choice_proposals: Array<{
     axis: ChoiceAxis;
     command_type: CommandType;
@@ -449,6 +531,13 @@ export type FastTurnPacket = {
     recent_locations: string[];
     recent_pattern_ids: string[];
     must_complete_this_turn: boolean;
+    offstage_characters: Array<{
+      character_id: string;
+      name: string;
+      prototype: Prototype;
+      scenes_absent: number;
+    }>;
+    must_introduce_keeper: boolean;
     novelty_rules: string[];
   };
   committed_event: Pick<
@@ -459,6 +548,38 @@ export type FastTurnPacket = {
     Pick<StoryEvent, "event_id" | "command_type" | "summary" | "source_location">
   >;
   current_state: GameState;
+  canon_ledger: {
+    timeline: {
+      turn_index: number;
+      current_location: string;
+      recent_transitions: Array<{
+        from: string;
+        to: string;
+        time_passed: string;
+        reason: string;
+      }>;
+    };
+    active_objective: ActiveObjective;
+    character_positions: Array<{
+      character_id: string;
+      name: string;
+      status: CharacterStatus;
+      location: string | null;
+      current_goal: string;
+      current_belief: string;
+    }>;
+    durable_clues: string[];
+    world_rules: string[];
+  };
+  scene_cell: {
+    start_location: string;
+    required_choice_result: string;
+    permitted_character_ids: string[];
+    permitted_unlocked_fact_ids: string[];
+    forbidden_revelations: string[];
+    dramatic_purpose: string;
+    completion_test: string;
+  };
   active_scene: Pick<
     Scene,
     | "scene_id"
@@ -475,7 +596,9 @@ export type FastTurnPacket = {
     relationship_to_listener: Relationship;
     accessible_memories: CharacterMemory[];
     unlocked_facts: StoryFact[];
+    mind: CharacterMindState;
   }>;
+  eligible_storylets: Storylet[];
   retrieved_craft_cards: CraftCard[];
   supported_commands: CommandType[];
   output_requirements: {

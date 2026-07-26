@@ -1,5 +1,5 @@
-import { DemoApp } from "@/components/demo-app";
+import { GameField } from "@/components/gamefield";
 
 export default function Home() {
-  return <DemoApp />;
+  return <GameField />;
 }

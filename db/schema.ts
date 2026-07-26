@@ -1,4 +1,4 @@
-import { sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export const worldPreviews = sqliteTable("world_previews", {
   previewId: text("preview_id").primaryKey(),
@@ -26,4 +26,13 @@ export const generationLogs = sqliteTable("generation_logs", {
   latencyMs: text("latency_ms").notNull(),
   usedFallback: text("used_fallback").notNull(),
   createdAt: text("created_at").notNull(),
+});
+
+export const detectiveSessions = sqliteTable("detective_sessions", {
+  caseId: text("case_id").primaryKey(),
+  revision: integer("revision").notNull(),
+  status: text("status").notNull(),
+  payloadJson: text("payload_json").notNull(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
 });

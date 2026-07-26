@@ -3,7 +3,7 @@ import { headers } from "next/headers";
 import "./globals.css";
 
 const description =
-  "Create a living audio-story world where choices become character memories.";
+  "A field of AI-built games that remember what you did.";
 
 export async function generateMetadata(): Promise<Metadata> {
   const requestHeaders = await headers();
@@ -14,21 +14,21 @@ export async function generateMetadata(): Promise<Metadata> {
   const imageUrl = `${protocol}://${host}/og.png`;
 
   return {
-    title: "Pocket Multiverse",
+    title: "AI Storify GameField",
     description,
     icons: {
       icon: "/favicon.svg",
       shortcut: "/favicon.svg",
     },
     openGraph: {
-      title: "Pocket Multiverse",
+      title: "AI Storify GameField",
       description,
       type: "website",
       images: [{ url: imageUrl, width: 1734, height: 907 }],
     },
     twitter: {
       card: "summary_large_image",
-      title: "Pocket Multiverse",
+      title: "AI Storify GameField",
       description,
       images: [imageUrl],
     },

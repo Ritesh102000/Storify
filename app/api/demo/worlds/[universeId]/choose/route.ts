@@ -3,17 +3,18 @@ import {
   appendStoryTurn,
   assertSchemaV2,
   buildFastTurnPacket,
-  isRepetitiveStoryTurn,
   prepareArcForTurn,
   toWorldView,
-  validateStoryTurnReferences,
 } from "@/lib/domain/state";
-import { fallbackStoryTurn } from "@/lib/domain/fallbacks";
+import {
+  commitFallbackSimulation,
+  fallbackStoryTurn,
+} from "@/lib/domain/fallbacks";
 import { chooseRequestSchema } from "@/lib/schemas";
 import { ApiError, errorResponse } from "@/lib/server/api";
-import { generateStoryTurn } from "@/lib/server/openai";
 import { retrieveForTurn } from "@/lib/server/retrieval";
 import { getWorld, saveWorld } from "@/lib/server/store";
+import { orchestrateStoryTurn } from "@/lib/server/story-orchestrator";
 
 type RouteContext = { params: Promise<{ universeId: string }> };
 
@@ -47,46 +48,41 @@ export async function POST(request: Request, context: RouteContext) {
       retrieval.trace,
     );
     committed.session.last_context_trace = trace;
-    const generated = await generateStoryTurn(
-      committed.session,
-      committed.event,
-      packet,
-    );
+    let generated;
     try {
-      generated.draft = validateStoryTurnReferences(
+      generated = await orchestrateStoryTurn(
         committed.session,
-        generated.draft,
+        committed.event,
+        packet,
       );
     } catch (error) {
-      generated.draft = fallbackStoryTurn(
+      const fallbackDraft = fallbackStoryTurn(
         committed.session,
         committed.event,
       );
-      generated.generation = {
-        ...generated.generation,
-        status: "layered_fallback",
-        provider: "fixture",
-        model: "continuity-fallback",
+      commitFallbackSimulation(
+        committed.session,
+        committed.event,
+        fallbackDraft,
+      );
+      generated = {
+        draft: fallbackDraft,
+        critique: {
+          valid: false,
+          errors: [],
+          repair_instructions: [],
+        },
+        generation: {
+        status: "layered_fallback" as const,
+        provider: "fixture" as const,
+        model: "simulator-fallback",
+        latency_ms: 0,
         used_fallback: true,
         fallback_reason:
           error instanceof Error
-            ? `Continuity validation: ${error.message}`
-            : "Continuity validation failed.",
-      };
-    }
-    if (isRepetitiveStoryTurn(committed.session, generated.draft)) {
-      generated.draft = fallbackStoryTurn(
-        committed.session,
-        committed.event,
-      );
-      generated.generation = {
-        ...generated.generation,
-        status: "layered_fallback",
-        provider: "fixture",
-        model: "milestone-causal-fallback",
-        used_fallback: true,
-        fallback_reason:
-          "The generated scene repeated recent narration or plot information.",
+            ? `Simulator pipeline: ${error.message}`
+            : "Simulator pipeline failed.",
+        },
       };
     }
     if (committed.session.last_context_trace) {
@@ -95,11 +91,35 @@ export async function POST(request: Request, context: RouteContext) {
       committed.session.last_context_trace.valid_choice_count =
         generated.draft.choice_proposals.length;
     }
-    const updated = appendStoryTurn(
-      committed.session,
-      committed.event,
-      generated.draft,
-    );
+    // appendStoryTurn revalidates the draft. If that rejects a generated scene
+    // the turn must still resolve, otherwise the listener is stuck on a choice
+    // that fails identically on every retry.
+    let updated;
+    try {
+      updated = appendStoryTurn(
+        committed.session,
+        committed.event,
+        generated.draft,
+      );
+    } catch (error) {
+      if (generated.generation.used_fallback) throw error;
+      const rescueSession = commitChoice(current, input.choice_id).session;
+      prepareArcForTurn(rescueSession);
+      rescueSession.last_context_trace = trace;
+      const rescueDraft = fallbackStoryTurn(rescueSession, committed.event);
+      commitFallbackSimulation(rescueSession, committed.event, rescueDraft);
+      updated = appendStoryTurn(rescueSession, committed.event, rescueDraft);
+      generated.generation = {
+        status: "layered_fallback" as const,
+        provider: "fixture" as const,
+        model: "simulator-fallback",
+        latency_ms: generated.generation.latency_ms,
+        used_fallback: true,
+        fallback_reason: `Generated scene failed final validation: ${
+          error instanceof Error ? error.message : "unknown"
+        }`,
+      };
+    }
     updated.generation = generated.generation;
     await saveWorld(updated);
 

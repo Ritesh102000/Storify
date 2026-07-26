@@ -101,11 +101,18 @@ async function retrieveCraft(input: {
           filters: [
             { type: "eq", key: "doc_type", value: "craft" },
             { type: "eq", key: "template_id", value: input.templateId },
+            // Without this the phase only influenced the query text, and 58% of
+            // retrieved cards were for the wrong stage of the arc — opening
+            // technique was being handed to the director during the crisis.
+            { type: "eq", key: "story_phase", value: input.phase },
           ],
         },
         ranking_options: { ranker: "auto", score_threshold: 0.1 },
       },
-      { signal: AbortSignal.timeout(4_000) },
+      // Kept deliberately: a slow vector search falls back to local cards, so
+      // this bounds the turn instead of costing it. 4s was tight enough to
+      // trigger needless fallbacks.
+      { signal: AbortSignal.timeout(20_000) },
     );
     const excluded = new Set(input.excludeCardIds ?? []);
     const hits = page.data

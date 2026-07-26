@@ -9,6 +9,7 @@ import type {
   WorldSession,
 } from "@/lib/types";
 import { currentScene } from "./state";
+import { recordPlayerEventInSimulation } from "@/lib/simulation/world";
 
 export class CommandError extends Error {
   constructor(
@@ -78,6 +79,7 @@ export function commitChoice(
   };
   session.events.push(event);
   session.memories.push(...memoriesForEvent(session, event, before));
+  recordPlayerEventInSimulation(session, event);
   return { session, event };
 }
 
@@ -114,7 +116,6 @@ function applyRegisteredCommand(session: WorldSession, choice: Choice): void {
         "The current scene objective is no longer active.",
       );
     }
-    session.state.active_objective.status = "achieved";
     for (const characterId of scene.present_character_ids) {
       session.state.relationships[characterId].tension += 3;
     }
@@ -136,9 +137,6 @@ function applyRegisteredCommand(session: WorldSession, choice: Choice): void {
   }
   session.state.relationships[targetId].trust += 2;
   session.state.relationships[targetId].tension += 14;
-  if (!session.state.unlocked_fact_ids.includes(target.secret_fact_id)) {
-    session.state.unlocked_fact_ids.push(target.secret_fact_id);
-  }
 }
 
 function immutableSummary(

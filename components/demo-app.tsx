@@ -21,6 +21,7 @@ type TemplateCard = {
 
 type ApiProblem = { error?: { message?: string } };
 type Stage = "setup" | "preview" | "play";
+const ACTIVE_WORLD_SESSION_KEY = "pocket-multiverse.active-world-id";
 
 const CUSTOM_SETUP: WorldSetupInput = {
   template_id: "create_your_own",
@@ -44,6 +45,7 @@ const CUSTOM_SETUP: WorldSetupInput = {
   customization_prompt: "",
   language: "English",
   content_tone: "family_safe",
+  creativity: "balanced",
 };
 
 export function DemoApp() {
@@ -58,13 +60,40 @@ export function DemoApp() {
   const [activeSpinOff, setActiveSpinOff] = useState<SpinOff | null>(null);
 
   useEffect(() => {
-    void api<{ templates: TemplateCard[] }>("/api/demo/templates")
-      .then((data) => {
-        setTemplates(data.templates);
-        setSetup(clone(data.templates[0].setup));
-      })
-      .catch((reason) => setError(messageOf(reason)))
-      .finally(() => setBusy(null));
+    let cancelled = false;
+    const activeWorldId = readActiveWorldId();
+
+    void (async () => {
+      const [templateResult, worldResult] = await Promise.allSettled([
+        api<{ templates: TemplateCard[] }>("/api/demo/templates"),
+        activeWorldId
+          ? api<{ world: WorldView }>(
+              `/api/demo/worlds/${encodeURIComponent(activeWorldId)}`,
+            )
+          : Promise.resolve(null),
+      ]);
+      if (cancelled) return;
+
+      if (templateResult.status === "fulfilled") {
+        setTemplates(templateResult.value.templates);
+        const firstTemplate = templateResult.value.templates[0];
+        if (firstTemplate) setSetup(clone(firstTemplate.setup));
+      } else {
+        setError(messageOf(templateResult.reason));
+      }
+
+      if (worldResult.status === "fulfilled" && worldResult.value?.world) {
+        setWorld(worldResult.value.world);
+        setStage("play");
+      } else if (activeWorldId) {
+        clearActiveWorldId();
+      }
+      setBusy(null);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(
@@ -103,6 +132,7 @@ export function DemoApp() {
         body: JSON.stringify({ preview_id: preview.preview_id }),
       });
       setWorld(data.world);
+      rememberActiveWorld(data.world.universe_id);
       setStage("play");
     } catch (reason) {
       setError(messageOf(reason));
@@ -138,7 +168,7 @@ export function DemoApp() {
 
   async function listen() {
     if (!world || busy) return;
-    setBusy("Generating an AI voice");
+    setBusy("Generating the OpenAI voice");
     setError("");
     try {
       const response = await fetch(
@@ -213,6 +243,7 @@ export function DemoApp() {
     }
     stopAudio();
     setWorld(null);
+    clearActiveWorldId();
     setPreview(null);
     setActiveSpinOff(null);
     setStage("setup");
@@ -229,6 +260,7 @@ export function DemoApp() {
   function selectTemplate(template: TemplateCard | "custom") {
     setPreview(null);
     setWorld(null);
+    clearActiveWorldId();
     setStage("setup");
     setSetup(
       template === "custom" ? clone(CUSTOM_SETUP) : clone(template.setup),
@@ -241,7 +273,7 @@ export function DemoApp() {
         <button className="brand" onClick={() => void startOver()}>
           <span className="brand-mark">PM</span>
           <span>
-            <strong>Pocket Multiverse</strong>
+            <strong>Living Stories</strong>
             <small>Living audio stories</small>
           </span>
         </button>
@@ -319,12 +351,11 @@ function SetupScreen({
   return (
     <section className="content setup-screen">
       <div className="hero">
-        <p className="eyebrow">Hackathon MVP</p>
+        <p className="eyebrow">Living Stories</p>
         <h1>Start a world. Make one choice. Watch it remember.</h1>
         <p>
-          Begin with a tested universe or describe your own. OpenAI writes the
-          story; the game engine owns every permanent consequence.
-        </p>
+          Begin with a crafted universe or describe your own. The story is
+          written live; the world engine keeps every consequence permanent.</p>
       </div>
 
       <section className="section-block">
@@ -479,6 +510,53 @@ function SetupScreen({
         </div>
       </section>
 
+      <section className="section-block">
+        <div className="section-heading">
+          <h2>Storytelling style</h2>
+          <p>How much atmosphere the narrator uses. Facts stay identical.</p>
+        </div>
+        <div className="gf-creativity">
+          {(
+            [
+              ["grounded", "Grounded", "Plain and procedural. Fastest."],
+              ["balanced", "Balanced", "Grounded but alive. Recommended."],
+              ["vivid", "Vivid", "Sensory and atmospheric. Slower."],
+            ] as const
+          ).map(([value, title, hint]) => (
+            <button
+              type="button"
+              key={value}
+              className={`gf-choice-tile ${setup.creativity === value ? "is-selected" : ""}`}
+              aria-pressed={setup.creativity === value}
+              onClick={() => setSetup({ ...setup, creativity: value })}
+            >
+              <span className="gf-tile-title">{title}</span>
+              <span className="gf-tile-hint">{hint}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="gf-temp">
+          <div className="gf-temp-head">
+            <label htmlFor="gf-temperature">Temperature</label>
+            <span className="gf-temp-badge">Inactive</span>
+          </div>
+          <input
+            id="gf-temperature"
+            type="range"
+            min="0"
+            max="100"
+            defaultValue="70"
+            disabled
+            aria-describedby="gf-temp-note"
+          />
+          <p className="gf-temp-note" id="gf-temp-note">
+            The current story models do not accept a temperature parameter.
+            Storytelling style above is what changes the prose today.
+          </p>
+        </div>
+      </section>
+
       <div className="action-row">
         <p>
           The preview is editable and nothing becomes permanent until you start
@@ -628,6 +706,8 @@ function PlayerScreen({
   reset: () => void;
   busy: boolean;
 }) {
+  // Readers get the story. Engine internals stay behind one switch.
+  const [devView, setDevView] = useState(false);
   const names = useMemo(
     () =>
       new Map(
@@ -640,7 +720,7 @@ function PlayerScreen({
   );
 
   return (
-    <section className="player">
+    <section className={devView ? "player" : "player gf-reader"}>
       <div className="player-header">
         <div>
           <p className="eyebrow">
@@ -655,6 +735,13 @@ function PlayerScreen({
         <div className="player-actions">
           <button className="secondary" onClick={listen} disabled={busy}>
             ▶ Listen
+          </button>
+          <button
+            className="text-button gf-devtoggle"
+            onClick={() => setDevView((value) => !value)}
+            title="Show the engine state behind this scene"
+          >
+            {devView ? "Hide details" : "Details"}
           </button>
           <button className="text-button" onClick={() => void reset()}>
             Start over
@@ -678,8 +765,8 @@ function PlayerScreen({
               <span>{world.scene.location}</span>
               <span>
                 {world.generation.provider === "openai"
-                  ? "OpenAI fast path"
-                  : "Deterministic fallback"}
+                  ? "Authoritative simulation pipeline"
+                  : "Local simulator fallback"}
               </span>
             </div>
             <h2 className="scene-title">{world.scene.title}</h2>
@@ -687,17 +774,39 @@ function PlayerScreen({
               <strong>Current objective</strong>
               {world.scene.scene_goal}
             </p>
-            <p className="narration">{world.scene.narration}</p>
-            {world.scene.dialogue.map((line) => (
-              <blockquote key={`${line.character_id}-${line.text}`}>
-                <strong>{names.get(line.character_id)}</strong>
-                {line.text}
-              </blockquote>
-            ))}
+            {(world.scene.story_blocks?.length
+              ? world.scene.story_blocks
+              : [
+                  {
+                    block_type: "narration" as const,
+                    character_id: null,
+                    text: world.scene.narration,
+                    responds_to_previous: false,
+                  },
+                ]
+            ).map((block, index) =>
+              block.block_type === "dialogue" && block.character_id ? (
+                <blockquote key={`${index}-${block.character_id}-${block.text}`}>
+                  <strong>{names.get(block.character_id)}</strong>
+                  {block.text}
+                </blockquote>
+              ) : (
+                <p className="narration" key={`${index}-${block.text}`}>
+                  {block.text}
+                </p>
+              ),
+            )}
+            {world.generation.used_fallback &&
+            world.generation.fallback_reason ? (
+              <details className="proof">
+                <summary>Why the local scene was used</summary>
+                <p>{world.generation.fallback_reason}</p>
+              </details>
+            ) : null}
             {audioUrl ? (
               <div className="audio-wrap">
                 <audio id="story-audio" controls src={audioUrl} />
-                <small>AI-generated voice</small>
+                <small>AI-generated OpenAI voice</small>
               </div>
             ) : null}
           </article>
@@ -756,13 +865,44 @@ function PlayerScreen({
               <h2>{activeSpinOff.title}</h2>
               <p>{activeSpinOff.opening_narration}</p>
               <small>
-                One-level demo branch · the main story remains unchanged
+                A private thread · your main story stays exactly as you left it
               </small>
             </article>
           ) : null}
         </div>
 
         <aside className="world-sidebar">
+          <details className="trace" open>
+            <summary>World simulator</summary>
+            <dl>
+              <div>
+                <dt>Simulation time</dt>
+                <dd>{world.simulator.time_label}</dd>
+              </div>
+              <div>
+                <dt>Tracked entities</dt>
+                <dd>{world.simulator.entity_count}</dd>
+              </div>
+              <div>
+                <dt>Canonical facts</dt>
+                <dd>{world.simulator.canonical_fact_count}</dd>
+              </div>
+              <div>
+                <dt>Open threads</dt>
+                <dd>{world.simulator.open_thread_count}</dd>
+              </div>
+            </dl>
+            {world.simulator.last_effects.length ? (
+              <>
+                <h4>Committed simulation effects</h4>
+                <ul className="memory-list">
+                  {world.simulator.last_effects.map((effect) => (
+                    <li key={effect}>{effect}</li>
+                  ))}
+                </ul>
+              </>
+            ) : null}
+          </details>
           <div className="state-strip">
             <div>
               <small>Objective</small>
@@ -786,7 +926,7 @@ function PlayerScreen({
             </div>
           </div>
 
-          <details className="trace" open>
+          <details className="trace story-panel" open>
             <summary>Plot threads</summary>
             <h4>Questions still open</h4>
             <ul className="thread-list">
@@ -825,6 +965,13 @@ function PlayerScreen({
                   </span>
                 </summary>
                 <p>{character.relationship_to_listener}</p>
+                <p className="muted">
+                  <strong>Now:</strong> {character.mind.current_emotion} ·{" "}
+                  {character.mind.current_goal}
+                </p>
+                <p className="muted">
+                  <strong>Believes:</strong> {character.mind.current_belief}
+                </p>
                 <div className="meter-row">
                   <span>
                     Trust
@@ -890,6 +1037,10 @@ function PlayerScreen({
                   <dd>{world.context_trace.retrieval.card_ids.length}</dd>
                 </div>
                 <div>
+                  <dt>Selected storylet</dt>
+                  <dd>{world.context_trace.selected_storylet_id ?? "None"}</dd>
+                </div>
+                <div>
                   <dt>RAG sources</dt>
                   <dd>
                     {world.context_trace.retrieval.source_titles.join(", ") ||
@@ -905,6 +1056,16 @@ function PlayerScreen({
                   </dd>
                 </div>
               </dl>
+              {world.context_trace.quality_warnings.length ? (
+                <>
+                  <h4>Server repairs</h4>
+                  <ul className="memory-list">
+                    {world.context_trace.quality_warnings.map((warning) => (
+                      <li key={warning}>{warning}</li>
+                    ))}
+                  </ul>
+                </>
+              ) : null}
             </details>
           ) : null}
         </aside>
@@ -941,6 +1102,31 @@ function messageOf(reason: unknown): string {
   return reason instanceof Error
     ? reason.message
     : "Something went wrong. Please try again.";
+}
+
+function readActiveWorldId(): string | null {
+  try {
+    return window.sessionStorage.getItem(ACTIVE_WORLD_SESSION_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function rememberActiveWorld(universeId: string): void {
+  try {
+    window.sessionStorage.setItem(ACTIVE_WORLD_SESSION_KEY, universeId);
+  } catch {
+    // Private browsing or a storage policy may disable sessionStorage. The
+    // current in-memory play session still works normally.
+  }
+}
+
+function clearActiveWorldId(): void {
+  try {
+    window.sessionStorage.removeItem(ACTIVE_WORLD_SESSION_KEY);
+  } catch {
+    // See rememberActiveWorld.
+  }
 }
 
 function labelPrototype(value: string): string {

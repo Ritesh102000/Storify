@@ -1,4 +1,10 @@
 import { createId } from "@/lib/id";
+import { eligibleStorylets } from "@/lib/narrative/storylets";
+import {
+  createInitialSimulation,
+  ensureSimulation,
+} from "@/lib/simulation/world";
+import { fallbackStoryTurn } from "./fallbacks";
 import type {
   ArcMilestoneState,
   Character,
@@ -14,6 +20,7 @@ import type {
   Scene,
   StoryEvent,
   StoryFact,
+  StoryBlock,
   StoryTurnDraft,
   WorldPreview,
   WorldSession,
@@ -68,6 +75,15 @@ export function materializeWorld(preview: WorldPreview): WorldSession {
     immediate_consequence: "The opening danger is still unfolding.",
     time_passed: "No time has passed.",
     transition_reason: "This is the opening scene.",
+    storylet_id: "opening_seed",
+    causal_chain: {
+      chosen_action_result: "The listener has not acted yet.",
+      cost_paid: "No cost has been paid yet.",
+      observable_clue: preview.seed.opening_scene.objective_label,
+      new_hypothesis: preview.seed.story.central_question,
+      next_pressure: preview.seed.opening_scene.danger_label,
+    },
+    character_moves: [],
     new_information: null,
     thread_opened: preview.seed.story.central_question,
     thread_resolved: null,
@@ -77,6 +93,14 @@ export function materializeWorld(preview: WorldPreview): WorldSession {
       ),
     narration: preview.seed.opening_narration,
     dialogue: [],
+    story_blocks: [
+      {
+        block_type: "narration",
+        character_id: null,
+        text: preview.seed.opening_narration,
+        responds_to_previous: false,
+      },
+    ],
     choice_ids: choices.map((choice) => choice.choice_id),
     created_from_event_id: null,
   };
@@ -88,6 +112,7 @@ export function materializeWorld(preview: WorldPreview): WorldSession {
   const milestones = preview.seed.arc_plan.milestones.map(toMilestoneState);
   milestones[0].status = "active";
   milestones[0].scene_count = 1;
+  const simulation = createInitialSimulation(preview, characters);
 
   return {
     schema_version: 2,
@@ -98,6 +123,8 @@ export function materializeWorld(preview: WorldPreview): WorldSession {
     universe: preview.seed.universe,
     story: preview.seed.story,
     arc_plan: preview.seed.arc_plan,
+    storylet_deck: preview.seed.storylet_deck,
+    creativity: preview.creativity ?? "balanced",
     arc_state: {
       arc_id: createId("arc"),
       arc_number: 1,
@@ -111,8 +138,28 @@ export function materializeWorld(preview: WorldPreview): WorldSession {
       recent_pattern_ids: preview.retrieval?.selected_pattern_id
         ? [preview.retrieval.selected_pattern_id]
         : [],
+      recent_storylet_ids: [],
       status: "active",
     },
+    character_minds: Object.fromEntries(
+      characters.map((character) => [
+        character.character_id,
+        {
+          current_goal: character.goal,
+          current_belief: `I believe my goal is still possible, but I do not yet know whether the listener will help me.`,
+          current_emotion:
+            character.prototype === "ally"
+              ? "afraid but hopeful"
+              : character.prototype === "rival"
+                ? "controlled and watchful"
+                : "guarded",
+          attitude_to_listener: character.relationship_to_listener,
+          last_changed_event_id: null,
+        },
+      ]),
+    ),
+    simulation,
+    simulation_events: [],
     semantic_labels: {
       objective_label: preview.seed.opening_scene.objective_label,
       danger_label: preview.seed.opening_scene.danger_label,
@@ -208,6 +255,34 @@ export function assertSchemaV2(session: WorldSession): void {
     });
     throw error;
   }
+  session.arc_state.recent_storylet_ids ??= [];
+  session.storylet_deck ??= [];
+  session.creativity ??= "balanced";
+  session.character_minds ??= Object.fromEntries(
+    session.characters.map((character) => [
+      character.character_id,
+      {
+        current_goal: character.goal,
+        current_belief: `I am pursuing ${character.goal.toLowerCase()}.`,
+        current_emotion: "guarded",
+        attitude_to_listener: character.relationship_to_listener,
+        last_changed_event_id: null,
+      },
+    ]),
+  );
+  for (const scene of session.scenes) {
+    scene.storylet_id ??= scene.created_from_event_id ? "legacy_scene" : "opening_seed";
+    scene.causal_chain ??= {
+      chosen_action_result: scene.because_of_choice,
+      cost_paid: scene.immediate_consequence,
+      observable_clue: scene.new_information ?? scene.obstacle,
+      new_hypothesis: scene.thread_opened ?? session.story.central_question,
+      next_pressure: scene.obstacle,
+    };
+    scene.character_moves ??= [];
+    scene.story_blocks ??= interleaveStoryBlocks(scene.narration, scene.dialogue);
+  }
+  ensureSimulation(session);
 }
 
 export function prepareArcForTurn(session: WorldSession): void {
@@ -228,6 +303,26 @@ export function buildFastTurnPacket(
 ): { packet: FastTurnPacket; trace: ContextTrace } {
   const scene = currentScene(session);
   const milestone = activeMilestone(session);
+  assertSchemaV2(session);
+  const storylets = eligibleStorylets(session, event);
+  const milestoneIndex = session.arc_state.active_milestone_index;
+  const revealIndex = (type: MilestoneType | null) =>
+    type
+      ? session.arc_state.milestones.findIndex(
+          (candidate) => candidate.milestone_type === type,
+        )
+      : -1;
+  const permittedFactIds = Object.values(session.simulation.facts)
+    .filter(
+      (fact) =>
+        fact.reveal_after === null ||
+        session.state.unlocked_fact_ids.includes(fact.fact_id) ||
+        (revealIndex(fact.reveal_after) <= milestoneIndex &&
+          fact.known_by_character_ids.some((id) =>
+            scene.present_character_ids.includes(id),
+          )),
+    )
+    .map((fact) => fact.fact_id);
   const recentEvents = session.events.slice(-3).map((item) => ({
     event_id: item.event_id,
     command_type: item.command_type,
@@ -262,6 +357,7 @@ export function buildFastTurnPacket(
           fact.character_id === character.character_id &&
           session.state.unlocked_fact_ids.includes(fact.fact_id),
       ),
+      mind: session.character_minds[character.character_id],
     }));
   const trace: ContextTrace = {
     trace_id: createId("trace"),
@@ -281,7 +377,9 @@ export function buildFastTurnPacket(
     proposal_count: 0,
     valid_choice_count: 0,
     retrieval,
-    prompt_version: 3,
+    selected_storylet_id: null,
+    quality_warnings: [],
+    prompt_version: 4,
     schema_version: 2,
   };
   return {
@@ -300,6 +398,22 @@ export function buildFastTurnPacket(
         recent_pattern_ids: session.arc_state.recent_pattern_ids.slice(-4),
         must_complete_this_turn:
           milestone.scene_count + 1 >= milestone.maximum_scenes,
+        // The mystery keeper sat offstage for entire arcs because nothing ever
+        // told the director they were missing. Surface it as state, not hope.
+        offstage_characters: session.characters
+          .filter(
+            (character) =>
+              !session.scenes.some((item) =>
+                item.present_character_ids.includes(character.character_id),
+              ),
+          )
+          .map((character) => ({
+            character_id: character.character_id,
+            name: character.name,
+            prototype: character.prototype,
+            scenes_absent: session.scenes.length,
+          })),
+        must_introduce_keeper: keeperMustAppear(session),
         novelty_rules: [
           "The selected choice must cause the immediate consequence and next scene.",
           "Do not reuse a stored discovery, recent scene goal, or recent dramatic situation.",
@@ -316,6 +430,64 @@ export function buildFastTurnPacket(
       },
       recent_events: recentEvents,
       current_state: session.state,
+      canon_ledger: {
+        timeline: {
+          turn_index: session.state.turn_index,
+          current_location: scene.location,
+          recent_transitions: session.simulation.transitions.slice(-4).map(
+            (transition) => ({
+              from: transition.from_location_id
+                ? session.simulation.entities[transition.from_location_id]?.name ??
+                  transition.from_location_id
+                : "unknown",
+              to: transition.to_location_id
+                ? session.simulation.entities[transition.to_location_id]?.name ??
+                  transition.to_location_id
+                : "unknown",
+              time_passed: `${transition.elapsed_minutes} minutes`,
+              reason: transition.reason,
+            }),
+          ),
+        },
+        active_objective: session.state.active_objective,
+        character_positions: session.characters.map((character) => ({
+          character_id: character.character_id,
+          name: character.name,
+          status: session.state.character_statuses[character.character_id],
+          location: session.simulation.entities[character.character_id]?.location_id
+            ? session.simulation.entities[
+                session.simulation.entities[character.character_id].location_id!
+              ]?.name ?? null
+            : null,
+          current_goal:
+            session.simulation.characters[character.character_id]?.mind.current_goal ??
+            character.goal,
+          current_belief:
+            session.simulation.characters[character.character_id]?.mind
+              .current_belief ?? "",
+        })),
+        durable_clues: Object.values(session.simulation.facts)
+          .filter(
+            (fact) =>
+              fact.status === "active" &&
+              permittedFactIds.includes(fact.fact_id),
+          )
+          .map((fact) => fact.statement),
+        world_rules: session.universe.rules,
+      },
+      scene_cell: {
+        start_location: scene.location,
+        required_choice_result: event.summary,
+        permitted_character_ids: characterViews.map(
+          (character) => character.character_id,
+        ),
+        permitted_unlocked_fact_ids: [
+          ...new Set(permittedFactIds),
+        ],
+        forbidden_revelations: milestone.forbidden_revelations,
+        dramatic_purpose: milestone.dramatic_purpose,
+        completion_test: milestone.completion_evidence_description,
+      },
       active_scene: {
         scene_id: scene.scene_id,
         title: scene.title,
@@ -326,6 +498,7 @@ export function buildFastTurnPacket(
         present_character_ids: scene.present_character_ids,
       },
       character_views: characterViews,
+      eligible_storylets: storylets,
       retrieved_craft_cards: cards,
       supported_commands: [
         "help_character",
@@ -351,16 +524,85 @@ export function validateStoryTurnReferences(
 ): StoryTurnDraft {
   const current = currentScene(session);
   const milestone = activeMilestone(session);
+  const warnings: string[] = [];
   const characterIds = new Set(session.characters.map((item) => item.character_id));
-  const present = [...new Set(draft.present_character_ids)].filter((id) =>
+  let present = [...new Set(draft.present_character_ids)].filter((id) =>
     characterIds.has(id),
   );
+  if (present.length < 2) {
+    present = [...new Set([...present, ...current.present_character_ids])].filter(
+      (id) => characterIds.has(id),
+    ).slice(0, 3);
+    warnings.push("Unknown or missing present-character IDs were replaced from canon.");
+  }
   if (present.length < 2) throw new Error("A story scene needs two present characters.");
   const narrationWords = draft.narration.trim().split(/\s+/).length;
-  if (narrationWords < 120 || narrationWords > 200) {
+  // Only reject lengths that indicate a broken generation. Discarding a good
+  // scene for being 2 words long is the same all-or-nothing failure that made
+  // the template fallback the most common path.
+  if (narrationWords < 80 || narrationWords > 460) {
     throw new Error(
-      `Narration must contain 120-200 words; received ${narrationWords}.`,
+      `Narration is outside the recoverable 80-460 word range; received ${narrationWords}.`,
     );
+  }
+  if (narrationWords < 120 || narrationWords > 200) {
+    warnings.push(
+      `Narration used ${narrationWords} words instead of the 120-200 target.`,
+    );
+  }
+  // Storylet decks are authored in design voice ("The listener can rub charcoal
+  // across the backing"). Those strings reach the reader through the fallback
+  // narration and through scene_goal, so rewrite them into story voice rather
+  // than discarding an otherwise usable scene.
+  const beforeSanitize = [draft.narration, draft.scene_goal].join(" ");
+  draft = {
+    ...draft,
+    narration: toStoryVoice(draft.narration),
+    scene_goal: toStoryVoice(draft.scene_goal),
+    dialogue: draft.dialogue.map((line) => ({
+      ...line,
+      text: toStoryVoice(line.text),
+    })),
+    story_blocks: draft.story_blocks.map((block) => ({
+      ...block,
+      text: toStoryVoice(block.text),
+    })),
+  };
+  if (beforeSanitize !== [draft.narration, draft.scene_goal].join(" ")) {
+    warnings.push("Design-voice phrasing was rewritten into story voice.");
+  }
+
+  const readerText = [
+    draft.narration,
+    draft.scene_goal,
+    ...draft.dialogue.map((line) => line.text),
+  ].join(" ");
+  const bannedMeta = [
+    "current objective",
+    "latest obstacle",
+    "investigation evidence",
+    "usable lead",
+    "the next move is specific",
+    "milestone",
+    "storylet",
+    "char_ally",
+    "char_rival",
+    "char_keeper",
+  ];
+  const foundMeta = bannedMeta.find((phrase) =>
+    normalize(readerText).includes(normalize(phrase)),
+  );
+  if (foundMeta || /\bturn\s+\d+\b/i.test(readerText)) {
+    throw new Error(
+      `Reader-facing prose exposed story-engine scaffolding${foundMeta ? `: ${foundMeta}` : ""}.`,
+    );
+  }
+  const event = session.events.at(-1);
+  const validStoryletIds = new Set(
+    event ? eligibleStorylets(session, event).map((item) => item.storylet_id) : [],
+  );
+  if (!validStoryletIds.has(draft.storylet_id)) {
+    throw new Error("The generated scene did not use an eligible storylet.");
   }
 
   const arrivals = present.filter((id) => !current.present_character_ids.includes(id));
@@ -370,8 +612,12 @@ export function validateStoryTurnReferences(
       !normalize(draft.transition_reason).includes(normalize(character.name)) &&
       !normalize(draft.narration).includes(normalize(character.name))
     ) {
-      throw new Error(`The arrival of ${character.name} was not explained.`);
+      present = present.filter((id) => id !== characterId);
+      warnings.push(`Unexplained arrival for ${character.name} was removed.`);
     }
+  }
+  if (present.length < 2) {
+    present = [...new Set([...present, ...current.present_character_ids])].slice(0, 3);
   }
   if (
     normalize(draft.location) !== normalize(current.location) &&
@@ -379,17 +625,86 @@ export function validateStoryTurnReferences(
   ) {
     throw new Error("A location change requires time_passed and transition_reason.");
   }
-  const speakers = new Set(draft.dialogue.map((line) => line.character_id));
+  const dialogue = draft.dialogue
+    .filter((line) => present.includes(line.character_id) && line.text.trim())
+    .slice(0, 8)
+    .map((line, index) => ({
+      ...line,
+      responds_to_previous: index > 0,
+    }));
+  const speakers = new Set(dialogue.map((line) => line.character_id));
   if (
-    speakers.size < 2 ||
-    [...speakers].some((id) => !present.includes(id)) ||
-    draft.dialogue.slice(1).some((line) => !line.responds_to_previous)
+    dialogue.length < 3 ||
+    speakers.size < 2
   ) {
     throw new Error("Dialogue must be a connected exchange between present characters.");
   }
-  const priorDiscoveries = new Set(session.arc_state.discovered_clues.map(normalize));
-  if (draft.new_information && priorDiscoveries.has(normalize(draft.new_information))) {
-    throw new Error("The proposed discovery repeats stored canon.");
+  if (
+    dialogue.length !== draft.dialogue.length ||
+    draft.dialogue.some(
+      (line, index) => line.responds_to_previous !== (index > 0),
+    )
+  ) {
+    warnings.push("Dialogue IDs and response links were normalized to stored canon.");
+  }
+  let storyBlocks = draft.story_blocks.filter(
+    (block) =>
+      block.text.trim() &&
+      (block.block_type === "narration"
+        ? block.character_id === null
+        : Boolean(block.character_id && present.includes(block.character_id))),
+  );
+  const dialogueBlocks = storyBlocks.filter(
+    (block) => block.block_type === "dialogue",
+  );
+  const allDialogueRepresented = dialogue.every((line) =>
+    dialogueBlocks.some(
+      (block) =>
+        block.character_id === line.character_id &&
+        normalize(block.text) === normalize(line.text),
+    ),
+  );
+  const properlyInterleaved = storyBlocks.every(
+    (block, index) =>
+      block.block_type !== "dialogue" ||
+      (index > 0 &&
+        index < storyBlocks.length - 1 &&
+        storyBlocks[index - 1].block_type === "narration" &&
+        storyBlocks[index + 1].block_type === "narration"),
+  );
+  const narrationBlocksAreComplete = storyBlocks
+    .filter((block) => block.block_type === "narration")
+    .every((block) => /[.!?]["'’”)]?$/.test(block.text.trim()));
+  if (
+    storyBlocks.length < 7 ||
+    !allDialogueRepresented ||
+    !properlyInterleaved ||
+    !narrationBlocksAreComplete
+  ) {
+    const sentenceSafeBlocks = interleaveSentenceBlocks(
+      draft.narration,
+      dialogue,
+    );
+    if (!sentenceSafeBlocks) {
+      throw new Error(
+        "Narration does not contain enough complete action beats to interleave dialogue safely.",
+      );
+    }
+    storyBlocks = sentenceSafeBlocks;
+    warnings.push("Presentation blocks were rebuilt to interleave action and speech.");
+  }
+  // Exact-string matching let the same clue be rediscovered in paraphrase — the
+  // ledger and the photograph were each "found" twice in one arc. Compare on
+  // content-word overlap so a restatement is caught too.
+  if (
+    draft.new_information &&
+    session.arc_state.discovered_clues.some(
+      (clue) =>
+        tokenOverlap(normalize(clue), normalize(draft.new_information!)) > 0.5,
+    )
+  ) {
+    draft = { ...draft, new_information: null };
+    warnings.push("A repeated discovery was omitted instead of discarding the scene.");
   }
   if (
     draft.new_information &&
@@ -397,35 +712,68 @@ export function validateStoryTurnReferences(
       normalize(draft.new_information!).includes(normalize(item)),
     )
   ) {
-    throw new Error("The discovery violates the milestone revelation boundary.");
+    draft = { ...draft, new_information: null };
+    warnings.push("A discovery outside the active revelation boundary was omitted.");
   }
 
-  const proposals = draft.choice_proposals;
+  const fallback = fallbackStoryTurn(session, event!);
   const expected = {
     protect: "help_character",
     pursue: "pursue_goal",
     confront: "confront_character",
   } as const;
-  if (
-    new Set(proposals.map((choice) => choice.axis)).size !== 3 ||
-    proposals.some((choice) => expected[choice.axis] !== choice.command_type)
-  ) {
-    throw new Error("Choices must provide one valid protect, pursue, and confront axis.");
-  }
+  const proposals = (["protect", "pursue", "confront"] as const).map((axis) => {
+    const proposed = draft.choice_proposals.find(
+      (choice) => choice.axis === axis && choice.command_type === expected[axis],
+    );
+    const safe = fallback.choice_proposals.find((choice) => choice.axis === axis)!;
+    if (!proposed) {
+      warnings.push(
+        `The ${axis} choice was missing from the scene and was replaced with a generic option.`,
+      );
+    }
+    return proposed ?? safe;
+  });
   for (const proposal of proposals) {
     const target = proposal.arguments.target_id;
     if (
       (proposal.axis === "protect" || proposal.axis === "confront") &&
       (!target || !present.includes(target))
     ) {
-      throw new Error(`${proposal.axis} must target a present character.`);
+      const replacement =
+        proposal.axis === "protect" ? present[0] : present[1] ?? present[0];
+      proposal.arguments.target_id = replacement;
+      warnings.push(`${proposal.axis} target was replaced with a present character.`);
     }
+    if (proposal.axis === "pursue") proposal.arguments.target_id = null;
   }
   if (
     new Set(proposals.map((choice) => normalize(choice.narrative_intent))).size !== 3 ||
     new Set(proposals.map((choice) => normalize(choice.anticipated_tradeoff))).size !== 3
   ) {
-    throw new Error("Choices need distinct intents and tradeoffs.");
+    warnings.push("Duplicate choice framing was replaced with concrete fallback framing.");
+    for (const axis of ["protect", "pursue", "confront"] as const) {
+      const index = proposals.findIndex((choice) => choice.axis === axis);
+      proposals[index] = fallback.choice_proposals.find(
+        (choice) => choice.axis === axis,
+      )!;
+    }
+  }
+
+  const movesByCharacter = new Map(
+    draft.character_moves
+      .filter((move) => present.includes(move.character_id))
+      .map((move) => [move.character_id, move]),
+  );
+  for (const characterId of present) {
+    if (movesByCharacter.has(characterId)) continue;
+    const fallbackMove = fallback.character_moves.find(
+      (move) => move.character_id === characterId,
+    );
+    if (fallbackMove) {
+      movesByCharacter.set(characterId, fallbackMove);
+      warnings.push("A missing character move was restored from current character state.");
+    }
   }
 
   const resolved = draft.thread_resolved
@@ -443,11 +791,20 @@ export function validateStoryTurnReferences(
   const afterThisScene = milestone.scene_count + 1;
   const canComplete =
     afterThisScene >= milestone.minimum_scenes &&
-    (milestone.unique_discovery_count > 0 || Boolean(draft.new_information)) &&
+    (milestone.unique_discovery_count > 0 ||
+      Boolean(draft.new_information) ||
+      afterThisScene >= milestone.maximum_scenes) &&
     Boolean(draft.milestone_completion_evidence);
+  if (session.last_context_trace) {
+    session.last_context_trace.quality_warnings = warnings;
+  }
   return {
     ...draft,
     present_character_ids: present,
+    dialogue,
+    story_blocks: storyBlocks,
+    character_moves: [...movesByCharacter.values()],
+    choice_proposals: proposals,
     thread_resolved: resolved,
     thread_opened: opened,
     milestone_action:
@@ -500,12 +857,16 @@ export function appendStoryTurn(
     immediate_consequence: draft.immediate_consequence,
     time_passed: draft.time_passed,
     transition_reason: draft.transition_reason,
+    storylet_id: draft.storylet_id,
+    causal_chain: draft.causal_chain,
+    character_moves: draft.character_moves,
     new_information: draft.new_information,
     thread_opened: draft.thread_opened,
     thread_resolved: draft.thread_resolved,
     present_character_ids: draft.present_character_ids,
     narration: draft.narration,
     dialogue: draft.dialogue,
+    story_blocks: draft.story_blocks,
     choice_ids: choices.map((choice) => choice.choice_id),
     created_from_event_id: event.event_id,
   };
@@ -538,6 +899,25 @@ export function appendStoryTurn(
     session.arc_state.last_new_information = draft.new_information;
     milestone.unique_discovery_count += 1;
   }
+  for (const move of draft.character_moves) {
+    if (!session.character_minds[move.character_id]) continue;
+    session.character_minds[move.character_id] = {
+      current_goal: move.want_now,
+      current_belief: move.belief_after,
+      current_emotion: move.emotion_after,
+      attitude_to_listener: move.relationship_move,
+      last_changed_event_id: event.event_id,
+    };
+  }
+  session.arc_state.recent_storylet_ids = [
+    ...session.arc_state.recent_storylet_ids.filter(
+      (id) => id !== draft.storylet_id,
+    ),
+    draft.storylet_id,
+  ].slice(-4);
+  if (session.last_context_trace) {
+    session.last_context_trace.selected_storylet_id = draft.storylet_id;
+  }
   session.arc_state.recent_locations = [
     ...session.arc_state.recent_locations.filter(
       (location) => normalize(location) !== normalize(draft.location),
@@ -560,9 +940,13 @@ export function appendStoryTurn(
 function evaluateMilestone(session: WorldSession, draft: StoryTurnDraft): void {
   const milestone = activeMilestone(session);
   if (draft.milestone_action !== "complete") return;
+  // At or past the scene ceiling the arc must be allowed to move on. Requiring a
+  // unique discovery here deadlocks a milestone whose discoveries were all
+  // rejected as repeats, and the story can then never reach its resolution.
+  const atCeiling = milestone.scene_count >= milestone.maximum_scenes;
   if (
     milestone.scene_count < milestone.minimum_scenes ||
-    milestone.unique_discovery_count < 1 ||
+    (milestone.unique_discovery_count < 1 && !atCeiling) ||
     !draft.milestone_completion_evidence
   ) {
     return;
@@ -646,6 +1030,7 @@ export function toWorldView(session: WorldSession): WorldView {
       character_id: character.character_id,
       status: session.state.character_statuses[character.character_id],
       relationship: session.state.relationships[character.character_id],
+      mind: session.character_minds[character.character_id],
       memories: session.memories.filter(
         (memory) => memory.character_id === character.character_id,
       ),
@@ -660,6 +1045,22 @@ export function toWorldView(session: WorldSession): WorldView {
     context_trace: session.last_context_trace,
     spin_offs: session.spin_offs,
     generation: session.generation,
+    simulator: {
+      version: session.simulation.simulation_version,
+      time_label: session.simulation.clock.time_label,
+      entity_count: Object.keys(session.simulation.entities).length,
+      canonical_fact_count: Object.values(session.simulation.facts).filter(
+        (fact) => fact.status === "active",
+      ).length,
+      open_thread_count: Object.values(session.simulation.threads).filter(
+        (thread) => thread.status === "open",
+      ).length,
+      transition_count: session.simulation.transitions.length,
+      last_effects:
+        session.simulation_events.at(-1)?.effects.map(
+          (effect) => effect.description,
+        ) ?? [],
+    },
   };
 }
 
@@ -700,7 +1101,19 @@ export function continueWorldArc(session: WorldSession): WorldSession {
     last_new_information: null,
     recent_locations: [currentScene(next).location],
     recent_pattern_ids: [],
+    recent_storylet_ids: [],
     status: "active",
+  };
+  const simulationThreadId = `thread_arc_${priorArc.arc_number + 1}`;
+  next.simulation.threads[simulationThreadId] = {
+    thread_id: simulationThreadId,
+    question,
+    stakes: next.story.main_goal,
+    status: "open",
+    required_evidence_count: 3,
+    evidence_fact_ids: [],
+    opened_event_id: next.events.at(-1)?.event_id ?? null,
+    resolved_event_id: null,
   };
   next.state.goal_status = "active";
   next.state.story_progress = 0;
@@ -724,12 +1137,29 @@ export function continueWorldArc(session: WorldSession): WorldSession {
       "A settled relationship and a changed world rule now point toward a fresh conflict.",
     time_passed: "Several days have passed.",
     transition_reason: "The world has had time to react to the previous resolution.",
+    storylet_id: "arc_continuation",
+    causal_chain: {
+      chosen_action_result: "The prior arc reached a lasting resolution.",
+      cost_paid: consequences || "The world retains the cost of that resolution.",
+      observable_clue: "Two incompatible reports describe the same aftermath.",
+      new_hypothesis: question,
+      next_pressure: "The consequence is spreading while the characters disagree.",
+    },
+    character_moves: [],
     new_information: null,
     thread_opened: question,
     thread_resolved: null,
     present_character_ids: present,
     narration: `Several days after the last decision, ${next.universe.title} has begun to live with what you changed. The victory remains real; nothing has reset. Yet its cost has travelled farther than anyone expected. At ${priorScene.location}, two familiar voices bring incompatible reports, each rooted in the choices they remember you making. One asks you to protect the people carrying the burden. Another points to evidence that the change is spreading. Between them lies a question the old story could not answer: ${question} You can begin with the relationship under pressure, follow the evidence, or confront the person whose version of the aftermath does not fit.`,
     dialogue: [],
+    story_blocks: [
+      {
+        block_type: "narration",
+        character_id: null,
+        text: `Several days after the last decision, ${next.universe.title} has begun to live with what you changed. The victory remains real; nothing has reset. Yet its cost has travelled farther than anyone expected. At ${priorScene.location}, two familiar voices bring incompatible reports, each rooted in the choices they remember you making. One asks you to protect the people carrying the burden. Another points to evidence that the change is spreading. Between them lies a question the old story could not answer: ${question} You can begin with the relationship under pressure, follow the evidence, or confront the person whose version of the aftermath does not fit.`,
+        responds_to_previous: false,
+      },
+    ],
     choice_ids: choices.map((choice) => choice.choice_id),
     created_from_event_id: null,
   };
@@ -789,6 +1219,25 @@ function continuationChoices(
   ];
 }
 
+// True once the arc has reached the stage where a secret-holder the listener has
+// never met would make the revelation meaningless.
+function keeperMustAppear(session: WorldSession): boolean {
+  const keeper = session.characters.find(
+    (character) => character.prototype === "mystery_keeper",
+  );
+  if (!keeper) return false;
+  const hasAppeared = session.scenes.some((scene) =>
+    scene.present_character_ids.includes(keeper.character_id),
+  );
+  if (hasAppeared) return false;
+  const reached = new Set(session.arc_state.completed_milestone_types);
+  return (
+    reached.has("escalation") ||
+    session.arc_state.milestones[session.arc_state.active_milestone_index]
+      .milestone_type !== "investigation"
+  );
+}
+
 function activeMilestone(session: WorldSession): ArcMilestoneState {
   return session.arc_state.milestones[session.arc_state.active_milestone_index];
 }
@@ -818,10 +1267,96 @@ function normalize(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
 }
 
+// Rewrites design-document phrasing into second-person story voice.
+function toStoryVoice(value: string): string {
+  return value
+    .replace(/\bThe listener can\b/g, "You can")
+    .replace(/\bthe listener can\b/g, "you can")
+    .replace(/\bThe listener's\b/g, "Your")
+    .replace(/\bthe listener's\b/g, "your")
+    .replace(/\bThe listener\b/g, "You")
+    .replace(/\bthe listener\b/g, "you");
+}
+
 function tokenOverlap(left: string, right: string): number {
   const leftTokens = new Set(left.split(" ").filter((token) => token.length > 3));
   const rightTokens = new Set(right.split(" ").filter((token) => token.length > 3));
   if (leftTokens.size === 0 || rightTokens.size === 0) return 0;
   const shared = [...leftTokens].filter((token) => rightTokens.has(token)).length;
   return shared / Math.min(leftTokens.size, rightTokens.size);
+}
+
+function interleaveStoryBlocks(
+  narration: string,
+  dialogue: StoryTurnDraft["dialogue"],
+): StoryBlock[] {
+  if (dialogue.length === 0) {
+    return [
+      {
+        block_type: "narration",
+        character_id: null,
+        text: narration,
+        responds_to_previous: false,
+      },
+    ];
+  }
+  const sentenceSafe = interleaveSentenceBlocks(narration, dialogue);
+  if (sentenceSafe) return sentenceSafe;
+  return [
+    {
+      block_type: "narration",
+      character_id: null,
+      text: narration,
+      responds_to_previous: false,
+    },
+  ];
+}
+
+function interleaveSentenceBlocks(
+  narration: string,
+  dialogue: StoryTurnDraft["dialogue"],
+): StoryBlock[] | null {
+  if (!dialogue.length) return interleaveStoryBlocks(narration, dialogue);
+  const units =
+    narration
+      .match(/[^.!?]+(?:[.!?]+["'’”)]*|$)/g)
+      ?.map((unit) => unit.trim())
+      .filter(Boolean) ?? [];
+  const chunkCount = dialogue.length + 1;
+  if (units.length < chunkCount) return null;
+  const baseSize = Math.floor(units.length / chunkCount);
+  const remainder = units.length % chunkCount;
+  const narrationChunks: string[] = [];
+  let cursor = 0;
+  for (let index = 0; index < chunkCount; index += 1) {
+    const size = baseSize + (index < remainder ? 1 : 0);
+    narrationChunks.push(units.slice(cursor, cursor + size).join(" "));
+    cursor += size;
+  }
+  const blocks: StoryBlock[] = [];
+  for (let index = 0; index < dialogue.length; index += 1) {
+    if (narrationChunks[index]) {
+      blocks.push({
+        block_type: "narration",
+        character_id: null,
+        text: narrationChunks[index],
+        responds_to_previous: index > 0,
+      });
+    }
+    blocks.push({
+      block_type: "dialogue",
+      character_id: dialogue[index].character_id,
+      text: dialogue[index].text,
+      responds_to_previous: index > 0,
+    });
+  }
+  if (narrationChunks.at(-1)) {
+    blocks.push({
+      block_type: "narration",
+      character_id: null,
+      text: narrationChunks.at(-1)!,
+      responds_to_previous: true,
+    });
+  }
+  return blocks;
 }
