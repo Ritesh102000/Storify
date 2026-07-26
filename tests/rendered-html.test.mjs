@@ -16,6 +16,9 @@ test("server-renders the AI Storify GameField interface", async () => {
   assert.match(gamefield, /Somewhere you keep/);
   assert.match(gamefield, /Living Stories/);
   assert.match(gamefield, /Character Forge/);
+  assert.match(gamefield, /Audio Story Engine/);
+  assert.match(gamefield, /https:\/\/story-cue-studio\.vercel\.app\//);
+  assert.match(gamefield, /target="_blank"/);
   assert.match(story, /Start a world/);
   assert.match(forge, /Your characters/);
   assert.doesNotMatch(
@@ -70,4 +73,21 @@ test("exposes AI Detective as a native server-backed GameField module", async ()
   assert.match(detective, /Truth does not volunteer/);
   assert.match(detective, /\/api\/detective\/cases/);
   assert.doesNotMatch(`${gamefield}\n${detective}`, /OPENAI_API_KEY|sk-proj-/);
+});
+
+test("uses the Story Cue Studio palette across every GameField module", async () => {
+  const styles = await readFile(
+    new URL("../app/globals.css", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(styles, /--gf-void:\s*#161615/);
+  assert.match(styles, /--gf-surface:\s*#211f1d/);
+  assert.match(styles, /--gf-text:\s*#f7f2e9/);
+  assert.match(styles, /--gf-dim:\s*#a69e92/);
+  assert.match(styles, /--gf-line:\s*#3b3834/);
+  assert.match(styles, /--gf-violet:\s*#d9ff4a/);
+  assert.match(styles, /--gf-amber:\s*#ff7448/);
+  assert.match(styles, /--gf-jade:\s*#9ac4ff/);
+  assert.doesNotMatch(styles, /--gf-violet:\s*#8b7bff/);
 });

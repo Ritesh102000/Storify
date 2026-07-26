@@ -9,6 +9,7 @@ type GameFieldModuleId =
   | "living-stories"
   | "character-forge"
   | "ai-detective"
+  | "audio-story-engine"
   | "world-atlas"
   | "story-arena";
 
@@ -19,6 +20,7 @@ type GameFieldModule = {
   description: string;
   glyph: string;
   status: "live" | "planned";
+  externalUrl?: string;
 };
 
 type WorldPortal = {
@@ -82,6 +84,16 @@ const MODULES: GameFieldModule[] = [
       "Search sealed scenes, test every alibi, and build a case before the trail goes cold. The culprit is fixed. Your theory has to earn the truth.",
     glyph: "⌕",
     status: "live",
+  },
+  {
+    id: "audio-story-engine",
+    name: "Audio Story Engine",
+    tagline: "Story → performance → REAPER",
+    description:
+      "Turn a normal story into a REAPER-ready immersive audio drama with full-cast voices, sound effects, ambience, and music.",
+    glyph: "≋",
+    status: "live",
+    externalUrl: "https://story-cue-studio.vercel.app/",
   },
   {
     id: "world-atlas",
@@ -256,37 +268,57 @@ export function GameField() {
           <header className="gf-section-head">
             <h2>The field</h2>
             <p>
-              Living Stories, Character Forge, and AI Detective are open. More
-              worlds are coming.
+              Living Stories, Character Forge, AI Detective, and Audio Story
+              Engine are open. More worlds are coming.
             </p>
           </header>
           <div className="gf-modules">
             {MODULES.map((module) => (
               <article
                 key={module.id}
-                className={`gf-card ${module.status === "live" ? "is-live" : "is-planned"}`}
+                className={`gf-card ${
+                  module.status === "live" ? "is-live" : "is-planned"
+                }`}
               >
                 <div className="gf-card-top">
                   <span className="gf-glyph" aria-hidden="true">
                     {module.glyph}
                   </span>
                   <span className={`gf-status gf-status-${module.status}`}>
-                    {module.status === "live" ? "Open" : "Soon"}
+                    {module.externalUrl
+                      ? "External"
+                      : module.status === "live"
+                        ? "Open"
+                        : "Soon"}
                   </span>
                 </div>
                 <h3 className="gf-card-name">{module.name}</h3>
                 <p className="gf-card-tagline">{module.tagline}</p>
                 <p className="gf-card-desc">{module.description}</p>
-                <button
-                  type="button"
-                  className="gf-enter"
-                  onClick={() =>
-                    module.status === "live" ? setOpenModule(module.id) : undefined
-                  }
-                  disabled={module.status !== "live"}
-                >
-                  {module.status === "live" ? "Enter" : "Not yet"}
-                </button>
+                {module.externalUrl ? (
+                  <a
+                    className="gf-enter gf-enter-link"
+                    href={module.externalUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    aria-label={`Open ${module.name} in a new tab`}
+                  >
+                    Open studio ↗
+                  </a>
+                ) : (
+                  <button
+                    type="button"
+                    className="gf-enter"
+                    onClick={() =>
+                      module.status === "live"
+                        ? setOpenModule(module.id)
+                        : undefined
+                    }
+                    disabled={module.status !== "live"}
+                  >
+                    {module.status === "live" ? "Enter" : "Not yet"}
+                  </button>
+                )}
               </article>
             ))}
           </div>
