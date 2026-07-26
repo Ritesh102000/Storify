@@ -1,5 +1,5 @@
-import { env } from "cloudflare:workers";
 import { ensureSchema } from "@/db/ensure-schema";
+import { execute, queryOne, queryRows } from "@/db/runtime";
 import { DetectiveError } from "./errors";
 import { detectiveSessionSchema } from "./schemas";
 import type { DetectiveCaseSession } from "./types";
@@ -8,31 +8,29 @@ export async function insertDetectiveCase(
   session: DetectiveCaseSession,
 ): Promise<void> {
   await ensureSchema();
-  await env.DB.prepare(
+  await execute(
     `INSERT INTO detective_sessions
       (case_id, revision, status, payload_json, created_at, updated_at)
      VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
-  )
-    .bind(
+    [
       session.case_id,
       session.revision,
       session.status,
       JSON.stringify(session),
       session.created_at,
       session.updated_at,
-    )
-    .run();
+    ],
+  );
 }
 
 export async function getDetectiveCase(
   caseId: string,
 ): Promise<DetectiveCaseSession | null> {
   await ensureSchema();
-  const row = await env.DB.prepare(
+  const row = await queryOne<{ payload_json: string }>(
     `SELECT payload_json FROM detective_sessions WHERE case_id = ?1`,
-  )
-    .bind(caseId)
-    .first<{ payload_json: string }>();
+    [caseId],
+  );
   if (!row) return null;
 
   try {
@@ -63,7 +61,7 @@ export async function updateDetectiveCase(
     );
   }
 
-  const result = await env.DB.prepare(
+  const rows = await queryRows<{ revision: number }>(
     `UPDATE detective_sessions
         SET revision = ?1,
             status = ?2,
@@ -71,18 +69,17 @@ export async function updateDetectiveCase(
             updated_at = ?4
       WHERE case_id = ?5 AND revision = ?6
       RETURNING revision`,
-  )
-    .bind(
+    [
       session.revision,
       session.status,
       JSON.stringify(session),
       session.updated_at,
       session.case_id,
       expectedRevision,
-    )
-    .run<{ revision: number }>();
+    ],
+  );
 
-  if (result.results?.length !== 1) {
+  if (rows.length !== 1) {
     throw new DetectiveError(
       409,
       "CASE_CONFLICT",

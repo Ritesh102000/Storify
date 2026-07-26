@@ -1,4 +1,4 @@
-import { env } from "cloudflare:workers";
+import { executeBatch } from "./runtime";
 
 let schemaReady: Promise<void> | null = null;
 
@@ -44,9 +44,9 @@ const statements = [
 
 export async function ensureSchema(): Promise<void> {
   if (!schemaReady) {
-    schemaReady = env.DB.batch(
-      statements.map((statement) => env.DB.prepare(statement)),
-    ).then(() => undefined);
+    schemaReady = executeBatch(
+      statements.map((statement) => ({ text: statement })),
+    );
   }
 
   await schemaReady;

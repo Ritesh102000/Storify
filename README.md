@@ -47,6 +47,33 @@ The single OpenAI key powers world generation, the story simulator, narration,
 Character Forge, image portraits, and transcription. The optional vector-store
 ID is needed only when hosted RAG is enabled.
 
+## Deploy to Vercel
+
+The same application supports two runtimes:
+
+- local development and the original Sites build use Cloudflare D1;
+- Vercel uses Neon/Postgres through `DATABASE_URL`.
+
+In Vercel:
+
+1. Import the Git repository and select the Next.js framework preset.
+2. Leave **Output Directory** empty. `npm run build` creates `.next`.
+3. Set Node.js to 22.x.
+4. Add a Neon Postgres database from the Vercel Marketplace and make sure its
+   pooled connection string is available as `DATABASE_URL`.
+5. Add `OPENAI_API_KEY` and the remaining values required from `.env.example`
+   to Production and Preview.
+6. Deploy. The first database-backed request creates the required tables.
+
+Do not upload or commit `.env` or `.env.local`. Vercel secrets belong in Project
+Settings → Environment Variables.
+
+The original Cloudflare production artifact remains available with:
+
+```bash
+npm run build:cloudflare
+```
+
 ## Knowledge base
 
 ```bash
@@ -88,7 +115,7 @@ The deterministic suite does not generate a live multi-turn story.
 - standalone Character Forge identities with optional story context;
 - Chrome and Safari microphone recording through OpenAI transcription;
 - server-owned Detective truth, clue gates, turn limits, and verdicts;
-- D1 aggregate persistence;
+- D1 persistence locally and Postgres persistence on Vercel;
 - same-world arc continuation after resolution.
 
 OpenAI writes creative content. It never writes state directly. The server

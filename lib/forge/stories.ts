@@ -1,5 +1,5 @@
-import { env } from "cloudflare:workers";
 import { ensureSchema } from "@/db/ensure-schema";
+import { queryOne, queryRows } from "@/db/runtime";
 import type { ForgeStorySummary } from "./types";
 
 type StoryRow = {
@@ -16,14 +16,14 @@ type StoryRow = {
  */
 export async function listForgeStories(): Promise<ForgeStorySummary[]> {
   await ensureSchema();
-  const result = await env.DB.prepare(
+  const rows = await queryRows<StoryRow>(
     `SELECT universe_id, template_id, payload_json, updated_at
        FROM world_sessions
       ORDER BY updated_at DESC
       LIMIT 100`,
-  ).run<StoryRow>();
+  );
 
-  return (result.results ?? [])
+  return rows
     .map(toSafeSummary)
     .filter((story): story is ForgeStorySummary => story !== null);
 }
@@ -32,13 +32,12 @@ export async function getForgeStory(
   universeId: string,
 ): Promise<ForgeStorySummary | null> {
   await ensureSchema();
-  const row = await env.DB.prepare(
+  const row = await queryOne<StoryRow>(
     `SELECT universe_id, template_id, payload_json, updated_at
        FROM world_sessions
       WHERE universe_id = ?1`,
-  )
-    .bind(universeId)
-    .first<StoryRow>();
+    [universeId],
+  );
   return row ? toSafeSummary(row) : null;
 }
 

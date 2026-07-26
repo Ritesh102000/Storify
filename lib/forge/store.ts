@@ -1,4 +1,4 @@
-import { env } from "cloudflare:workers";
+import { execute, executeBatch, queryOne, queryRows } from "@/db/runtime";
 import { createId } from "@/lib/id";
 import type {
   ForgedCharacter,
@@ -37,9 +37,7 @@ const STATEMENTS = [
 
 async function ensureForgeSchema(): Promise<void> {
   if (!ready) {
-    ready = env.DB.batch(
-      STATEMENTS.map((statement) => env.DB.prepare(statement)),
-    ).then(() => undefined);
+    ready = executeBatch(STATEMENTS.map((statement) => ({ text: statement })));
   }
   await ready;
 }
@@ -52,7 +50,7 @@ export async function saveCharacter(
   character: ForgedCharacter,
 ): Promise<ForgedCharacter> {
   await ensureForgeSchema();
-  await env.DB.prepare(
+  await execute(
     `INSERT INTO forged_characters
       (character_id, name, payload_json, archetype, origin, has_portrait, times_cast, created_at, updated_at)
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
@@ -64,8 +62,7 @@ export async function saveCharacter(
        has_portrait = excluded.has_portrait,
        times_cast = excluded.times_cast,
        updated_at = excluded.updated_at`,
-  )
-    .bind(
+    [
       character.character_id,
       character.name,
       JSON.stringify(character),
@@ -75,19 +72,17 @@ export async function saveCharacter(
       character.times_cast,
       character.created_at,
       character.updated_at,
-    )
-    .run();
+    ],
+  );
   return character;
 }
 
 export async function listCharacters(): Promise<ForgedCharacterSummary[]> {
   await ensureForgeSchema();
-  // The project's D1 typing exposes run<T>() rather than all(); it returns the
-  // same `results` array for a SELECT.
-  const result = await env.DB.prepare(
+  const rows = await queryRows<{ payload_json: string }>(
     `SELECT payload_json FROM forged_characters ORDER BY updated_at DESC LIMIT 200`,
-  ).run<{ payload_json: string }>();
-  return (result.results ?? []).map((row) => {
+  );
+  return rows.map((row) => {
     const full = parseStoredCharacter(row.payload_json);
     return {
       character_id: full.character_id,
@@ -108,24 +103,25 @@ export async function getCharacter(
   characterId: string,
 ): Promise<ForgedCharacter | null> {
   await ensureForgeSchema();
-  const row = await env.DB.prepare(
+  const row = await queryOne<{ payload_json: string }>(
     `SELECT payload_json FROM forged_characters WHERE character_id = ?1`,
-  )
-    .bind(characterId)
-    .first<{ payload_json: string }>();
+    [characterId],
+  );
   return row ? parseStoredCharacter(row.payload_json) : null;
 }
 
 export async function deleteCharacter(characterId: string): Promise<void> {
   await ensureForgeSchema();
   // Row and portrait go together — deletion must not leave an orphan image.
-  await env.DB.batch([
-    env.DB.prepare(`DELETE FROM forged_characters WHERE character_id = ?1`).bind(
-      characterId,
-    ),
-    env.DB.prepare(`DELETE FROM forged_portraits WHERE character_id = ?1`).bind(
-      characterId,
-    ),
+  await executeBatch([
+    {
+      text: `DELETE FROM forged_characters WHERE character_id = ?1`,
+      values: [characterId],
+    },
+    {
+      text: `DELETE FROM forged_portraits WHERE character_id = ?1`,
+      values: [characterId],
+    },
   ]);
 }
 
@@ -135,27 +131,28 @@ export async function savePortrait(input: {
   base64: string;
 }): Promise<void> {
   await ensureForgeSchema();
-  await env.DB.prepare(
+  await execute(
     `INSERT INTO forged_portraits (character_id, media_type, image_base64, created_at)
      VALUES (?1, ?2, ?3, ?4)
      ON CONFLICT(character_id) DO UPDATE SET
        media_type = excluded.media_type,
        image_base64 = excluded.image_base64,
        created_at = excluded.created_at`,
-  )
-    .bind(input.characterId, input.mediaType, input.base64, new Date().toISOString())
-    .run();
+    [input.characterId, input.mediaType, input.base64, new Date().toISOString()],
+  );
 }
 
 export async function getPortrait(
   characterId: string,
 ): Promise<{ mediaType: string; base64: string } | null> {
   await ensureForgeSchema();
-  const row = await env.DB.prepare(
+  const row = await queryOne<{
+    media_type: string;
+    image_base64: string;
+  }>(
     `SELECT media_type, image_base64 FROM forged_portraits WHERE character_id = ?1`,
-  )
-    .bind(characterId)
-    .first<{ media_type: string; image_base64: string }>();
+    [characterId],
+  );
   return row ? { mediaType: row.media_type, base64: row.image_base64 } : null;
 }
 
